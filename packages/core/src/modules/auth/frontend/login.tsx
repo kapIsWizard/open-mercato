@@ -71,6 +71,26 @@ function looksLikeJsonString(value: string): boolean {
   return trimmed.startsWith('{') || trimmed.startsWith('[')
 }
 
+function sanitizeClientRedirect(param: string | null): string | null {
+  const value = (param || '').trim()
+  if (!value) return null
+  if (!value.startsWith('/')) return null
+  if (value.startsWith('//')) return null
+  return value
+}
+
+function extractJwtRoles(token: unknown): string[] {
+  if (typeof token !== 'string' || !token) return []
+  const parts = token.split('.')
+  if (parts.length < 2) return []
+  try {
+    const payload = JSON.parse(atob(parts[1]!.replace(/-/g, '+').replace(/_/g, '/')))
+    return Array.isArray(payload?.roles) ? payload.roles.filter((role: unknown): role is string => typeof role === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 export default function LoginPage() {
   const t = useT()
   const translate = useCallback(
@@ -84,6 +104,13 @@ export default function LoginPage() {
   const requireFeature = (searchParams.get('requireFeature') || '').trim()
   const requiredRoles = requireRole ? requireRole.split(',').map((value) => value.trim()).filter(Boolean) : []
   const requiredFeatures = requireFeature ? requireFeature.split(',').map((value) => value.trim()).filter(Boolean) : []
+  const requestedRedirect = sanitizeClientRedirect(searchParams.get('redirect'))
+  const employeeLandingRedirect = requiredRoles.length === 1 && requiredRoles[0] === 'employee'
+    ? '/backend/purchasing/requests'
+    : null
+  const fallbackRedirect = employeeLandingRedirect && (!requestedRedirect || requestedRedirect === '/backend')
+    ? employeeLandingRedirect
+    : requestedRedirect
   const translatedRoles = requiredRoles.map((role) => translate(`auth.roles.${role}`, role))
   const translatedFeatures = requiredFeatures.map((feature) => translate(`features.${feature}`, feature))
   const [error, setError] = useState<string | null>(null)
@@ -240,6 +267,15 @@ export default function LoginPage() {
       // In case API returns 200 with JSON
       const data = await res.json().catch(() => null)
       clearAllOperations()
+      if (fallbackRedirect) {
+        router.replace(fallbackRedirect)
+        return
+      }
+      const tokenRoles = extractJwtRoles(data?.token)
+      if (requestedRedirect === '/backend' && tokenRoles.includes('employee')) {
+        router.replace('/backend/purchasing/requests')
+        return
+      }
       if (data && data.redirect) {
         router.replace(data.redirect)
       }

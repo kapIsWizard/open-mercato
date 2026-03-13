@@ -31,8 +31,8 @@ const addJsExtension = {
         let content = readFileSync(file, 'utf-8')
         // Add .js to relative imports that don't have an extension
         content = content.replace(
-          /from\s+["'](\.[^"']+)["']/g,
-          (match, path) => {
+          /((?:^|\n)\s*(?:import|export)\s+[\s\S]*?\sfrom\s+["'])(\.[^"'\n]+)(["'];?)/g,
+          (match, prefix, path, suffix) => {
             // Skip paths that already have an extension (including .ts for generated code templates)
             if (path.endsWith('.js') || path.endsWith('.json') || path.endsWith('.ts')) return match
             // Skip paths containing template literal placeholders (code generation templates)
@@ -40,9 +40,9 @@ const addJsExtension = {
             // Check if it's a directory with index.js
             const resolvedPath = join(fileDir, path)
             if (existsSync(resolvedPath) && existsSync(join(resolvedPath, 'index.js'))) {
-              return `from "${path}/index.js"`
+              return `${prefix}${path}/index.js${suffix}`
             }
-            return `from "${path}.js"`
+            return `${prefix}${path}.js${suffix}`
           }
         )
         content = content.replace(
