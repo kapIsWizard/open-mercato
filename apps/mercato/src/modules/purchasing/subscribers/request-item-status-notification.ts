@@ -22,7 +22,7 @@ type Payload = {
   organizationId?: string | null
 }
 
-const NOTIFIABLE_STATUSES = new Set(['cancelled', 'delivered', 'purchase_price_changed'])
+const NOTIFIABLE_STATUSES = new Set(['cancelled', 'in_stock', 'purchase_price_changed'])
 
 export default async function handle(payload: Payload, ctx: { resolve: <T = unknown>(name: string) => T }) {
   const normalizedStatus = normalizeItemStatusForView(payload.status)

@@ -90,11 +90,25 @@ const crud = makeCrudRoute({
       if (query.salesOwnerUserId) filters.sales_owner_user_id = { $eq: query.salesOwnerUserId }
       if (query.search) {
         const like = `%${escapeLikePattern(query.search)}%`
+        const em = (ctx.container.resolve('em') as EntityManager).fork()
+        const searchItemMatches = await em.find(PurchasingRequestItem, {
+          tenantId: ctx.auth?.tenantId ?? null,
+          organizationId: ctx.selectedOrganizationId ?? ctx.auth?.orgId ?? null,
+          deletedAt: null,
+          $or: [
+            { sku: { $ilike: like } },
+            { referenceNumber: { $ilike: like } },
+            { productName: { $ilike: like } },
+            { purchasingNote: { $ilike: like } },
+          ],
+        } as any, { fields: ['requestId'] })
+        const searchRequestIds = Array.from(new Set(searchItemMatches.map((item) => item.requestId)))
         filters.$or = [
           { request_number: { $ilike: like } },
           { customer_name: { $ilike: like } },
           { customer_nip: { $ilike: like } },
           { request_text: { $ilike: like } },
+          ...(searchRequestIds.length > 0 ? [{ id: { $in: searchRequestIds } }] : []),
         ]
       }
       if (query.createdFrom || query.createdTo) {

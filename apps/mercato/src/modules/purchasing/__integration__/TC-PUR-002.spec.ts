@@ -137,14 +137,14 @@ test.describe('TC-PUR-002: purchasing request UI happy path', () => {
       await expect(page.getByTestId('purchasing-detail-request-attachments-section')).toContainText(`request-${uniqueSuffix}.txt`)
       await expect(page.getByTestId('purchasing-detail-owner-select')).toContainText(/Purchasing Anna|Purchasing Marek|Purchasing Julia|Employee|Admin/)
 
-      await page.getByTestId('purchasing-detail-request-status-select').selectOption('waiting_for_supplier')
-      await expect(page.getByTestId('purchasing-detail-request-status-select')).toHaveValue('waiting_for_supplier')
+      await page.getByTestId('purchasing-detail-request-status-select').selectOption('in_progress')
+      await expect(page.getByTestId('purchasing-detail-request-status-select')).toHaveValue('in_progress')
       const updateRequestResponsePromise = page.waitForResponse(
         (response) => response.url().includes('/api/purchasing/requests') && response.request().method() === 'PUT',
       )
       await page.getByTestId('purchasing-detail-save-request').click()
       expect((await updateRequestResponsePromise).ok()).toBeTruthy()
-      await expect(page.getByTestId('purchasing-detail-request-status')).toContainText('Waiting for supplier')
+      await expect(page.getByTestId('purchasing-detail-request-status')).toContainText('In progress')
 
       await page.getByTestId('purchasing-detail-item-status-0').selectOption('cancelled')
       const updateItemResponsePromise = page.waitForResponse(

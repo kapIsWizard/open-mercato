@@ -256,7 +256,7 @@ Rules:
 
 ## Request Statuses
 
-POC canonical values:
+POC canonical values, zgodne z dokumentacją funkcjonalno-procesową:
 - `unassigned`
 - `assigned`
 - `in_progress`
@@ -264,21 +264,38 @@ POC canonical values:
 - `completed`
 - `cancelled`
 
+Mapowanie etykiet biznesowych:
+- `unassigned` → `Nieprzydzielone`
+- `assigned` → `Przydzielone`
+- `in_progress` → `W trakcie`
+- `partially_ordered` → `Częściowo zamówione`
+- `completed` → `Zrealizowane`
+- `cancelled` → `Anulowane`
+
 Rules:
 - new request starts as `unassigned`,
 - assigning `purchasing_owner_user_id` may move request to `assigned`,
+- request may become `in_progress` podczas operacyjnej obsługi zapytania,
 - request may become `completed` only when all active items are terminal,
 - request may become `partially_ordered` when at least one item is ordered/in transit and at least one remains open.
 
 ## Item Statuses
 
-POC canonical values:
+POC canonical values, zgodne z dokumentacją funkcjonalno-procesową:
 - `to_order`
 - `ordered`
 - `in_transit`
 - `in_stock`
 - `cancelled`
 - `purchase_price_changed`
+
+Mapowanie etykiet biznesowych:
+- `to_order` → `Do zamówienia`
+- `ordered` → `Zamówione u dostawcy`
+- `in_transit` → `W dostawie`
+- `in_stock` → `Na magazynie`
+- `cancelled` → `Anulowane`
+- `purchase_price_changed` → `Zmiana ceny zakupu`
 
 Rules:
 - new item starts as `to_order`,
