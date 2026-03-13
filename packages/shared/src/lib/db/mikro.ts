@@ -2,8 +2,10 @@ import 'dotenv/config'
 import 'reflect-metadata'
 import { MikroORM } from '@mikro-orm/core'
 import { PostgreSqlDriver } from '@mikro-orm/postgresql'
+import { getSslConfig } from './ssl'
 
 let ormInstance: MikroORM<PostgreSqlDriver> | null = null
+const DEV_DB_POOL_MAX = 20
 
 // Registration pattern for publishable packages
 let _entities: any[] | null = null
@@ -22,6 +24,30 @@ export function getOrmEntities(): any[] {
   return _entities
 }
 
+function parsePositiveInt(rawValue: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(rawValue ?? '', 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return parsed
+}
+
+export function resolveDbPoolConfig(env: NodeJS.ProcessEnv) {
+  const requestedPoolMin = parsePositiveInt(env.DB_POOL_MIN, 2)
+  const requestedPoolMax = parsePositiveInt(env.DB_POOL_MAX, 50)
+  const poolMax = env.NODE_ENV === 'production'
+    ? requestedPoolMax
+    : Math.min(requestedPoolMax, DEV_DB_POOL_MAX)
+  const poolMin = Math.min(requestedPoolMin, poolMax)
+  const idleTimeoutMillis = parsePositiveInt(env.DB_POOL_IDLE_TIMEOUT, 3000)
+  const acquireTimeoutMillis = parsePositiveInt(env.DB_POOL_ACQUIRE_TIMEOUT, 6000)
+
+  return {
+    poolMin,
+    poolMax,
+    idleTimeoutMillis,
+    acquireTimeoutMillis,
+  }
+}
+
 export async function getOrm() {
   if (ormInstance) {
     return ormInstance
@@ -29,12 +55,13 @@ export async function getOrm() {
   const entities = getOrmEntities()
   const clientUrl = process.env.DATABASE_URL
   if (!clientUrl) throw new Error('DATABASE_URL is not set')
-  
-  // Parse connection pool settings from environment
-  const poolMin = parseInt(process.env.DB_POOL_MIN || '2')
-  const poolMax = parseInt(process.env.DB_POOL_MAX || '50')
-  const poolIdleTimeout = parseInt(process.env.DB_POOL_IDLE_TIMEOUT || '3000')
-  const poolAcquireTimeout = parseInt(process.env.DB_POOL_ACQUIRE_TIMEOUT || '6000')
+
+  const {
+    poolMin,
+    poolMax,
+    idleTimeoutMillis: poolIdleTimeout,
+    acquireTimeoutMillis: poolAcquireTimeout,
+  } = resolveDbPoolConfig(process.env)
   const idleSessionTimeoutEnv = parseInt(process.env.DB_IDLE_SESSION_TIMEOUT_MS || '')
   const idleInTxTimeoutEnv = parseInt(process.env.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS || '')
   const idleSessionTimeoutMs = Number.isFinite(idleSessionTimeoutEnv)
@@ -51,7 +78,9 @@ export async function getOrm() {
     idleSessionTimeoutMs && idleSessionTimeoutMs > 0
       ? `-c idle_session_timeout=${idleSessionTimeoutMs}`
       : undefined
-  
+
+  const sslConfig = getSslConfig()
+
   ormInstance = await MikroORM.init<PostgreSqlDriver>({
     driver: PostgreSqlDriver,
     clientUrl,
@@ -80,6 +109,7 @@ export async function getOrm() {
         acquireTimeoutMillis: poolAcquireTimeout,
         idle_in_transaction_session_timeout: idleInTransactionTimeoutMs,
         options: connectionOptions,
+        ssl: sslConfig,
       },
     },
   })

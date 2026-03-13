@@ -1,5 +1,5 @@
 "use client"
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -13,6 +13,8 @@ import { clearAllOperations } from '@open-mercato/ui/backend/operations/store'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { X } from 'lucide-react'
 import { Notice } from '@open-mercato/ui/primitives/Notice'
+import { InjectionSpot } from '@open-mercato/ui/backend/injection/InjectionSpot'
+import type { AuthOverride, LoginFormWidgetContext } from './login-injection'
 
 const loginTenantKey = 'om_login_tenant'
 const loginTenantCookieMaxAge = 60 * 60 * 24 * 14
@@ -69,6 +71,26 @@ function looksLikeJsonString(value: string): boolean {
   return trimmed.startsWith('{') || trimmed.startsWith('[')
 }
 
+function sanitizeClientRedirect(param: string | null): string | null {
+  const value = (param || '').trim()
+  if (!value) return null
+  if (!value.startsWith('/')) return null
+  if (value.startsWith('//')) return null
+  return value
+}
+
+function extractJwtRoles(token: unknown): string[] {
+  if (typeof token !== 'string' || !token) return []
+  const parts = token.split('.')
+  if (parts.length < 2) return []
+  try {
+    const payload = JSON.parse(atob(parts[1]!.replace(/-/g, '+').replace(/_/g, '/')))
+    return Array.isArray(payload?.roles) ? payload.roles.filter((role: unknown): role is string => typeof role === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 export default function LoginPage() {
   const t = useT()
   const translate = useCallback(
@@ -82,15 +104,30 @@ export default function LoginPage() {
   const requireFeature = (searchParams.get('requireFeature') || '').trim()
   const requiredRoles = requireRole ? requireRole.split(',').map((value) => value.trim()).filter(Boolean) : []
   const requiredFeatures = requireFeature ? requireFeature.split(',').map((value) => value.trim()).filter(Boolean) : []
+  const requestedRedirect = sanitizeClientRedirect(searchParams.get('redirect'))
+  const employeeLandingRedirect = requiredRoles.length === 1 && requiredRoles[0] === 'employee'
+    ? '/backend/purchasing/requests'
+    : null
+  const fallbackRedirect = employeeLandingRedirect && (!requestedRedirect || requestedRedirect === '/backend')
+    ? employeeLandingRedirect
+    : requestedRedirect
   const translatedRoles = requiredRoles.map((role) => translate(`auth.roles.${role}`, role))
   const translatedFeatures = requiredFeatures.map((feature) => translate(`features.${feature}`, feature))
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [authOverride, setAuthOverride] = useState<AuthOverride | null>(null)
+  const [authOverridePending, setAuthOverridePending] = useState(false)
+  const [clientReady, setClientReady] = useState(false)
+  const [email, setEmail] = useState('')
   const [tenantId, setTenantId] = useState<string | null>(null)
   const [tenantName, setTenantName] = useState<string | null>(null)
   const [tenantLoading, setTenantLoading] = useState(false)
   const [tenantInvalid, setTenantInvalid] = useState<string | null>(null)
   const showTenantInvalid = tenantId != null && tenantInvalid === tenantId
+
+  useEffect(() => {
+    setClientReady(true)
+  }, [])
 
   useEffect(() => {
     const tenantParam = (searchParams.get('tenant') || '').trim()
@@ -163,7 +200,14 @@ export default function LoginPage() {
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (!clientReady || authOverridePending) {
+      return
+    }
     setError(null)
+    if (authOverride) {
+      authOverride.onSubmit()
+      return
+    }
     setSubmitting(true)
     try {
       const form = new FormData(e.currentTarget)
@@ -223,6 +267,15 @@ export default function LoginPage() {
       // In case API returns 200 with JSON
       const data = await res.json().catch(() => null)
       clearAllOperations()
+      if (fallbackRedirect) {
+        router.replace(fallbackRedirect)
+        return
+      }
+      const tokenRoles = extractJwtRoles(data?.token)
+      if (requestedRedirect === '/backend' && tokenRoles.includes('employee')) {
+        router.replace('/backend/purchasing/requests')
+        return
+      }
       if (data && data.redirect) {
         router.replace(data.redirect)
       }
@@ -235,6 +288,17 @@ export default function LoginPage() {
     }
   }
 
+  const loginFormContext = useMemo<LoginFormWidgetContext>(() => ({
+    email,
+    tenantId,
+    searchParams,
+    setAuthOverride,
+    setAuthOverridePending,
+    setError,
+  }), [email, tenantId, searchParams])
+
+  const formReady = clientReady && !authOverridePending
+
   return (
     <div className="min-h-svh flex items-center justify-center p-4">
       <Card className="w-full max-w-sm">
@@ -244,7 +308,7 @@ export default function LoginPage() {
           <CardDescription>{translate('auth.login.subtitle', 'Access your workspace')}</CardDescription>
         </CardHeader>
         <CardContent>
-          <form className="grid gap-3" onSubmit={onSubmit} noValidate>
+          <form className="grid gap-3" onSubmit={onSubmit} noValidate data-auth-ready={formReady ? '1' : '0'}>
             {tenantId ? (
               <input type="hidden" name="tenantId" value={tenantId} />
             ) : null}
@@ -296,24 +360,46 @@ export default function LoginPage() {
             )}
             <div className="grid gap-1">
               <Label htmlFor="email">{t('auth.email')}</Label>
-              <Input id="email" name="email" type="email" required aria-invalid={!!error} />
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                required
+                aria-invalid={!!error}
+                onChange={(e) => setEmail(e.target.value)}
+                onBlur={(e) => setEmail(e.target.value)}
+              />
             </div>
-            <div className="grid gap-1">
-              <Label htmlFor="password">{t('auth.password')}</Label>
-              <Input id="password" name="password" type="password" required aria-invalid={!!error} />
-            </div>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input type="checkbox" name="remember" className="accent-foreground" />
-              <span>{translate('auth.login.rememberMe', 'Remember me')}</span>
-            </label>
-            <button disabled={submitting} className="h-10 rounded-md bg-foreground text-background mt-2 hover:opacity-90 transition disabled:opacity-60">
-              {submitting ? translate('auth.login.loading', 'Loading...') : translate('auth.signIn', 'Sign in')}
-            </button>
-            <div className="text-xs text-muted-foreground mt-2">
-              <Link className="underline" href="/reset">
-                {translate('auth.login.forgotPassword', 'Forgot password?')}
-              </Link>
-            </div>
+            <InjectionSpot<LoginFormWidgetContext>
+              spotId="auth.login:form"
+              context={loginFormContext}
+            />
+            {authOverride?.hidePassword ? null : (
+              <div className="grid gap-1">
+                <Label htmlFor="password">{t('auth.password')}</Label>
+                <Input id="password" name="password" type="password" required={!authOverride} aria-invalid={!!error} />
+              </div>
+            )}
+            {!authOverride?.hideRememberMe && !authOverride?.hidePassword && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" name="remember" className="accent-foreground" />
+                <span>{translate('auth.login.rememberMe', 'Remember me')}</span>
+              </label>
+            )}
+            <Button type="submit" disabled={submitting || !formReady} className="h-10 mt-2">
+              {submitting
+                ? translate('auth.login.loading', 'Loading...')
+                : authOverride
+                  ? authOverride.providerLabel
+                  : translate('auth.signIn', 'Sign in')}
+            </Button>
+            {!authOverride?.hideForgotPassword && (
+              <div className="text-xs text-muted-foreground mt-2">
+                <Link className="underline" href="/reset">
+                  {translate('auth.login.forgotPassword', 'Forgot password?')}
+                </Link>
+              </div>
+            )}
           </form>
         </CardContent>
       </Card>

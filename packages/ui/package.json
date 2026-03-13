@@ -1,6 +1,6 @@
 {
   "name": "@open-mercato/ui",
-  "version": "0.4.3",
+  "version": "0.4.6",
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
@@ -38,6 +38,10 @@
       "types": "./src/backend/inputs/index.ts",
       "default": "./dist/backend/inputs/index.js"
     },
+    "./backend/confirm-dialog": {
+      "types": "./src/backend/confirm-dialog/index.ts",
+      "default": "./dist/backend/confirm-dialog/index.js"
+    },
     "./backend/charts": {
       "types": "./src/backend/charts/index.ts",
       "default": "./dist/backend/charts/index.js"
@@ -61,6 +65,10 @@
     "./backend/forms": {
       "types": "./src/backend/forms/index.ts",
       "default": "./dist/backend/forms/index.js"
+    },
+    "./backend/messages": {
+      "types": "./src/backend/messages/index.ts",
+      "default": "./dist/backend/messages/index.js"
     },
     "./backend/notifications": {
       "types": "./src/backend/notifications/index.ts",
@@ -109,9 +117,11 @@
   },
   "dependencies": {
     "@open-mercato/shared": "workspace:*",
+    "@radix-ui/react-popover": "^1.1.6",
     "@radix-ui/react-tooltip": "^1.2.8",
     "date-fns": "^4.1.0",
     "react-big-calendar": "^1.19.4",
+    "react-day-picker": "^9.6.4",
     "recharts": "^2.15.0"
   },
   "peerDependencies": {

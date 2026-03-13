@@ -3,30 +3,22 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { CrudForm, type CrudField, type CrudFormGroup } from '@open-mercato/ui/backend/CrudForm'
+import { CrudForm } from '@open-mercato/ui/backend/CrudForm'
 import { updateCrud } from '@open-mercato/ui/backend/utils/crud'
 import { apiCall, apiCallOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
-import { Switch } from '@open-mercato/ui/primitives/switch'
-import { z } from 'zod'
-import { ComboboxInput, type ComboboxOption } from '@open-mercato/ui/backend/inputs/ComboboxInput'
-import { Label } from '@open-mercato/ui/primitives/label'
-
-type ScheduleFormValues = {
-  name: string
-  description?: string
-  scopeType: 'system' | 'organization' | 'tenant'
-  scheduleType: 'cron' | 'interval'
-  scheduleValue: string
-  timezone?: string
-  targetType: 'queue' | 'command'
-  targetQueue?: string
-  targetCommand?: string
-  targetPayload?: string // JSON string
-  isEnabled: boolean
-}
+import {
+  type ScheduleFormValues,
+  createTargetOptionsLoader,
+  loadTimezoneOptions,
+  scheduledJobFormSchema,
+  scheduledJobFields,
+  scheduledJobGroups,
+  ScheduledJobEnabledSwitch,
+  buildScheduledJobPayload,
+} from '../../../../../lib/scheduledJobFormConfig'
 
 type ScheduleData = {
   id: string
@@ -43,11 +35,6 @@ type ScheduleData = {
   isEnabled: boolean
 }
 
-type TargetOptions = {
-  queues: ComboboxOption[]
-  commands: ComboboxOption[]
-}
-
 export default function EditSchedulePage({ params }: { params: { id: string } }) {
   const t = useT()
   const router = useRouter()
@@ -55,49 +42,11 @@ export default function EditSchedulePage({ params }: { params: { id: string } })
   const [error, setError] = React.useState<string | null>(null)
   const [initialData, setInitialData] = React.useState<Partial<ScheduleFormValues> | null>(null)
   const [isEnabled, setIsEnabled] = React.useState(false)
-  const targetOptionsRef = React.useRef<TargetOptions | null>(null)
 
-  const loadTargetOptions = React.useCallback(async (): Promise<TargetOptions> => {
-    if (targetOptionsRef.current) return targetOptionsRef.current
-    try {
-      const { result } = await apiCall<TargetOptions>('/api/scheduler/targets')
-      const options = result ?? { queues: [], commands: [] }
-      targetOptionsRef.current = options
-      return options
-    } catch {
-      return { queues: [], commands: [] }
-    }
-  }, [])
-
-  const loadQueueOptions = React.useCallback(async (query?: string): Promise<ComboboxOption[]> => {
-    const options = await loadTargetOptions()
-    if (!query) return options.queues
-    const lower = query.toLowerCase()
-    return options.queues.filter((q) => q.label.toLowerCase().includes(lower))
-  }, [loadTargetOptions])
-
-  const loadCommandOptions = React.useCallback(async (query?: string): Promise<ComboboxOption[]> => {
-    const options = await loadTargetOptions()
-    if (!query) return options.commands
-    const lower = query.toLowerCase()
-    return options.commands.filter((c) => c.label.toLowerCase().includes(lower))
-  }, [loadTargetOptions])
-
-  // Load timezone options - filtering on query for better performance
-  const loadTimezoneOptions = React.useCallback(async (query?: string) => {
-    try {
-      const allTz = Intl.supportedValuesOf('timeZone')
-      const filtered = query
-        ? allTz.filter((tz) => tz.toLowerCase().includes(query.toLowerCase()))
-        : allTz
-      return filtered.slice(0, 100).map((tz) => ({
-        value: tz,
-        label: tz,
-      }))
-    } catch {
-      return [{ value: 'UTC', label: 'UTC' }]
-    }
-  }, [])
+  const { loadQueueOptions, loadCommandOptions } = React.useMemo(
+    () => createTargetOptionsLoader(apiCall),
+    []
+  )
 
   React.useEffect(() => {
     async function fetchSchedule() {
@@ -109,13 +58,7 @@ export default function EditSchedulePage({ params }: { params: { id: string } })
         const schedule = result?.items?.[0]
         if (schedule) {
           setIsEnabled(schedule.isEnabled)
-          
-          // Convert targetPayload object to JSON string for the form
-          let targetPayloadStr = undefined
-          if (schedule.targetPayload && Object.keys(schedule.targetPayload).length > 0) {
-            targetPayloadStr = JSON.stringify(schedule.targetPayload, null, 2)
-          }
-          
+
           setInitialData({
             name: schedule.name,
             description: schedule.description || undefined,
@@ -126,7 +69,9 @@ export default function EditSchedulePage({ params }: { params: { id: string } })
             targetType: schedule.targetType,
             targetQueue: schedule.targetQueue || undefined,
             targetCommand: schedule.targetCommand || undefined,
-            targetPayload: targetPayloadStr,
+            targetPayload: (schedule.targetPayload && Object.keys(schedule.targetPayload).length > 0)
+              ? schedule.targetPayload
+              : undefined,
             isEnabled: schedule.isEnabled,
           })
         }
@@ -140,170 +85,14 @@ export default function EditSchedulePage({ params }: { params: { id: string } })
     fetchSchedule()
   }, [params.id, t])
 
-  const formSchema = React.useMemo(
-    () =>
-      z.object({
-        name: z.string().min(1, t('scheduler.form.name.required', 'Name is required')),
-        description: z.string().optional(),
-        scopeType: z.enum(['system', 'organization', 'tenant']),
-        scheduleType: z.enum(['cron', 'interval']),
-        scheduleValue: z.string().min(1, t('scheduler.form.schedule.required', 'Schedule is required')),
-        timezone: z.string(),
-        targetType: z.enum(['queue', 'command']),
-        targetQueue: z.string().optional(),
-        targetCommand: z.string().optional(),
-        targetPayload: z.string().optional().refine(
-          (val) => {
-            if (!val || val.trim() === '') return true
-            try {
-              JSON.parse(val)
-              return true
-            } catch {
-              return false
-            }
-          },
-          { message: t('scheduler.form.target_payload.invalid_json', 'Must be valid JSON') }
-        ),
-        isEnabled: z.boolean(),
-      }),
-    [t]
+  const formSchema = React.useMemo(() => scheduledJobFormSchema(t), [t])
+
+  const fields = React.useMemo(
+    () => scheduledJobFields(t, { loadQueueOptions, loadCommandOptions, loadTimezoneOptions }),
+    [t, loadQueueOptions, loadCommandOptions]
   )
 
-  const fields = React.useMemo<CrudField[]>(
-    () => [
-      {
-        id: 'name',
-        type: 'text',
-        label: t('scheduler.form.name', 'Name'),
-        required: true,
-      },
-      {
-        id: 'description',
-        type: 'textarea',
-        label: t('scheduler.form.description', 'Description'),
-      },
-      {
-        id: 'scopeType',
-        type: 'select',
-        label: t('scheduler.form.scope_type', 'Scope'),
-        required: true,
-        options: [
-          { value: 'system', label: t('scheduler.scope.system', 'System') },
-          { value: 'organization', label: t('scheduler.scope.organization', 'Organization') },
-          { value: 'tenant', label: t('scheduler.scope.tenant', 'Tenant') },
-        ],
-      },
-      {
-        id: 'scheduleType',
-        type: 'select',
-        label: t('scheduler.form.schedule_type', 'Schedule Type'),
-        required: true,
-        options: [
-          { value: 'cron', label: t('scheduler.type.cron', 'Cron Expression') },
-          { value: 'interval', label: t('scheduler.type.interval', 'Simple Interval') },
-        ],
-      },
-      {
-        id: 'scheduleValue',
-        type: 'text',
-        label: t('scheduler.form.schedule_value', 'Schedule Value'),
-        placeholder: t('scheduler.form.schedule_value.placeholder', 'e.g. 0 */6 * * * or 15m'),
-        description: t('scheduler.form.schedule_value.description', 'For cron: use cron expression (e.g., "0 0 * * *"). For interval: use format like "15m", "2h", "1d" (s=seconds, m=minutes, h=hours, d=days)'),
-        required: true,
-      },
-      {
-        id: 'timezone',
-        type: 'combobox',
-        label: t('scheduler.form.timezone', 'Timezone'),
-        placeholder: t('scheduler.form.timezone.placeholder', 'Search timezone...'),
-        required: true,
-        loadOptions: loadTimezoneOptions,
-        allowCustomValues: false,
-      },
-      {
-        id: 'targetType',
-        type: 'select',
-        label: t('scheduler.form.target_type', 'Target Type'),
-        required: true,
-        options: [
-          { value: 'queue', label: t('scheduler.target.queue', 'Queue') },
-          { value: 'command', label: t('scheduler.target.command', 'Command') },
-        ],
-      },
-      {
-        id: 'targetFields',
-        type: 'custom',
-        label: '',
-        component: ({ values, setFormValue }) => {
-          const targetType = values?.targetType as string | undefined
-          const targetQueue = (values?.targetQueue as string) || ''
-          const targetCommand = (values?.targetCommand as string) || ''
-
-          return (
-            <div className="space-y-4">
-              {targetType === 'queue' && (
-                <div className="space-y-1">
-                  <Label htmlFor="targetQueue">
-                    {t('scheduler.form.target_queue', 'Target Queue')}
-                  </Label>
-                  <ComboboxInput
-                    value={targetQueue}
-                    onChange={(next) => setFormValue && setFormValue('targetQueue', next)}
-                    placeholder={t('scheduler.form.target_queue.placeholder', 'Search queues...')}
-                    loadSuggestions={loadQueueOptions}
-                    allowCustomValues={true}
-                  />
-                </div>
-              )}
-              {targetType === 'command' && (
-                <div className="space-y-1">
-                  <Label htmlFor="targetCommand">
-                    {t('scheduler.form.target_command', 'Target Command')}
-                  </Label>
-                  <ComboboxInput
-                    value={targetCommand}
-                    onChange={(next) => setFormValue && setFormValue('targetCommand', next)}
-                    placeholder={t('scheduler.form.target_command.placeholder', 'Search commands...')}
-                    loadSuggestions={loadCommandOptions}
-                    allowCustomValues={false}
-                  />
-                </div>
-              )}
-            </div>
-          )
-        },
-      },
-      {
-        id: 'targetPayload',
-        type: 'textarea',
-        label: t('scheduler.form.target_payload', 'Job Arguments (JSON)'),
-        placeholder: t('scheduler.form.target_payload.placeholder', '{\n  "message": "Hello",\n  "value": 42\n}'),
-        description: t('scheduler.form.target_payload.description', 'Optional JSON object with arguments to pass to the command or queue job. Must be valid JSON format.'),
-      },
-    ],
-    [t, loadTimezoneOptions, loadQueueOptions, loadCommandOptions]
-  )
-
-  const groups = React.useMemo<CrudFormGroup[]>(
-    () => [
-      {
-        id: 'basic',
-        title: t('scheduler.form.group.basic', 'Basic Information'),
-        fields: ['name', 'description', 'scopeType'],
-      },
-      {
-        id: 'schedule',
-        title: t('scheduler.form.group.schedule', 'Schedule Configuration'),
-        fields: ['scheduleType', 'scheduleValue', 'timezone'],
-      },
-      {
-        id: 'target',
-        title: t('scheduler.form.group.target', 'Target Configuration'),
-        fields: ['targetType', 'targetFields', 'targetPayload'],
-      },
-    ],
-    [t]
-  )
+  const groups = React.useMemo(() => scheduledJobGroups(t), [t])
 
   if (loading) {
     return (
@@ -338,38 +127,14 @@ export default function EditSchedulePage({ params }: { params: { id: string } })
           cancelHref="/backend/config/scheduled-jobs"
           schema={formSchema}
           extraActions={
-            <div className="flex items-center gap-2">
-              <Label htmlFor="enabled-switch" className="text-sm font-medium cursor-pointer">
-                {isEnabled ? t('scheduler.form.enabled', 'Enabled') : t('scheduler.form.disabled', 'Disabled')}
-              </Label>
-              <Switch
-                id="enabled-switch"
-                checked={isEnabled}
-                onCheckedChange={setIsEnabled}
-              />
-            </div>
+            <ScheduledJobEnabledSwitch isEnabled={isEnabled} setIsEnabled={setIsEnabled} t={t} />
           }
           onSubmit={async (values) => {
-            // Parse targetPayload from JSON string to object
-            let targetPayload = null
-            if (values.targetPayload && values.targetPayload.trim()) {
-              try {
-                targetPayload = JSON.parse(values.targetPayload)
-              } catch (error) {
-                console.error('Failed to parse targetPayload JSON:', error)
-                flash(t('scheduler.error.invalidPayload', 'Invalid JSON payload'), 'error')
-                return
-              }
-            }
+            const payload = buildScheduledJobPayload(values, isEnabled)
 
             await updateCrud(
               'scheduler/jobs',
-              { 
-                id: params.id, 
-                ...values, 
-                targetPayload,
-                isEnabled 
-              }
+              { id: params.id, ...payload }
             )
 
             flash(t('scheduler.success.updated', 'Schedule updated successfully'), 'success')

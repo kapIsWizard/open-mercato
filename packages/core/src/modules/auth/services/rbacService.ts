@@ -11,6 +11,9 @@ interface AclData {
   organizations: string[] | null
 }
 
+const globalSuperAdminCache = new Map<string, boolean>()
+const globalSuperAdminInFlight = new Map<string, Promise<boolean>>()
+
 function isAclData(value: unknown): value is AclData {
   if (typeof value !== 'object' || value === null) return false
   const record = value as Partial<AclData>
@@ -26,7 +29,6 @@ function isAclData(value: unknown): value is AclData {
 export class RbacService {
   private cacheTtlMs: number = 5 * 60 * 1000 // 5 minutes default
   private cache: CacheStrategy | null = null
-  private globalSuperAdminCache = new Map<string, boolean>()
 
   constructor(private em: EntityManager, cache?: CacheStrategy) {
     this.cache = cache || null
@@ -127,7 +129,8 @@ export class RbacService {
    * @param userId - The ID of the user whose cache should be invalidated
    */
   async invalidateUserCache(userId: string): Promise<void> {
-    this.globalSuperAdminCache.delete(userId)
+    globalSuperAdminCache.delete(userId)
+    globalSuperAdminInFlight.delete(userId)
     await this.deleteCacheByTags([this.getUserTag(userId)])
   }
 
@@ -139,7 +142,8 @@ export class RbacService {
    * @param tenantId - The ID of the tenant whose cache should be invalidated
    */
   async invalidateTenantCache(tenantId: string): Promise<void> {
-    this.globalSuperAdminCache.clear()
+    globalSuperAdminCache.clear()
+    globalSuperAdminInFlight.clear()
     await this.deleteCacheByTags([this.getTenantTag(tenantId)], [tenantId])
   }
 
@@ -158,7 +162,8 @@ export class RbacService {
    * Use this for bulk operations or system-wide ACL changes.
    */
   async invalidateAllCache(): Promise<void> {
-    this.globalSuperAdminCache.clear()
+    globalSuperAdminCache.clear()
+    globalSuperAdminInFlight.clear()
     await this.deleteCacheByTags(['rbac:all'])
   }
 
@@ -185,37 +190,45 @@ export class RbacService {
   }
 
   private async isGlobalSuperAdmin(userId: string): Promise<boolean> {
-    if (this.globalSuperAdminCache.has(userId)) return this.globalSuperAdminCache.get(userId)!
-    const em = this.em.fork()
-    const userSuper = await em.findOne(UserAcl, { user: userId as any, isSuperAdmin: true })
-    if (userSuper && (userSuper as any).isSuperAdmin) {
-      this.globalSuperAdminCache.set(userId, true)
-      return true
+    if (globalSuperAdminCache.has(userId)) return globalSuperAdminCache.get(userId)!
+
+    const inFlight = globalSuperAdminInFlight.get(userId)
+    if (inFlight) return inFlight
+
+    const lookup = this.lookupGlobalSuperAdmin(userId)
+    globalSuperAdminInFlight.set(userId, lookup)
+
+    try {
+      const result = await lookup
+      globalSuperAdminCache.set(userId, result)
+      return result
+    } finally {
+      globalSuperAdminInFlight.delete(userId)
     }
+  }
+
+  private async lookupGlobalSuperAdmin(userId: string): Promise<boolean> {
+    const userSuper = await this.em.findOne(UserAcl, { user: userId as any, isSuperAdmin: true })
+    if (userSuper && (userSuper as any).isSuperAdmin) return true
+
     const links = await findWithDecryption(
-      em,
+      this.em,
       UserRole,
       { user: userId as any },
       { populate: ['role'] },
       { tenantId: null, organizationId: null },
     )
     const linkList = Array.isArray(links) ? links : []
-    if (!linkList.length) {
-      this.globalSuperAdminCache.set(userId, false)
-      return false
-    }
+    if (!linkList.length) return false
+
     const roleIds = Array.from(new Set(linkList.map((link) => {
       const role = link.role as any
       return role?.id ? String(role.id) : null
     }).filter((id): id is string => typeof id === 'string' && id.length > 0)))
-    if (!roleIds.length) {
-      this.globalSuperAdminCache.set(userId, false)
-      return false
-    }
-    const roleSuper = await em.findOne(RoleAcl, { isSuperAdmin: true, role: { $in: roleIds as any } } as any)
-    const result = !!(roleSuper && (roleSuper as any).isSuperAdmin)
-    this.globalSuperAdminCache.set(userId, result)
-    return result
+    if (!roleIds.length) return false
+
+    const roleSuper = await this.em.findOne(RoleAcl, { isSuperAdmin: true, role: { $in: roleIds as any } } as any)
+    return !!(roleSuper && (roleSuper as any).isSuperAdmin)
   }
 
   /**
