@@ -39,6 +39,12 @@ export const metadata = routeMetadata
 
 const NO_MATCH_UUID = '00000000-0000-0000-0000-000000000000'
 
+function intersectIdCandidates(current: string[] | null, next: string[]): string[] {
+  if (current === null) return next
+  const nextSet = new Set(next)
+  return current.filter((id) => nextSet.has(id))
+}
+
 const crud = makeCrudRoute({
   metadata: routeMetadata,
   orm: {
@@ -80,7 +86,7 @@ const crud = makeCrudRoute({
     },
     buildFilters: async (query: z.infer<typeof purchasingRequestListSchema>, ctx) => {
       const filters: Record<string, unknown> = {}
-      if (query.id) filters.id = { $eq: query.id }
+      let requestIdCandidates: string[] | null = query.id ? [query.id] : null
       if (query.requestStatus) {
         const statuses = resolveRequestStatusFilterValues(query.requestStatus)
         filters.request_status = statuses.length > 1 ? { $in: statuses } : { $eq: statuses[0] }
@@ -91,6 +97,17 @@ const crud = makeCrudRoute({
       if (query.search) {
         const like = `%${escapeLikePattern(query.search)}%`
         const em = (ctx.container.resolve('em') as EntityManager).fork()
+        const directRequestMatches = await em.find(PurchasingRequest, {
+          tenantId: ctx.auth?.tenantId ?? null,
+          organizationId: ctx.selectedOrganizationId ?? ctx.auth?.orgId ?? null,
+          deletedAt: null,
+          $or: [
+            { requestNumber: { $ilike: like } },
+            { customerName: { $ilike: like } },
+            { customerNip: { $ilike: like } },
+            { requestText: { $ilike: like } },
+          ],
+        } as any, { fields: ['id'] })
         const searchItemMatches = await em.find(PurchasingRequestItem, {
           tenantId: ctx.auth?.tenantId ?? null,
           organizationId: ctx.selectedOrganizationId ?? ctx.auth?.orgId ?? null,
@@ -102,14 +119,10 @@ const crud = makeCrudRoute({
             { purchasingNote: { $ilike: like } },
           ],
         } as any, { fields: ['requestId'] })
-        const searchRequestIds = Array.from(new Set(searchItemMatches.map((item) => item.requestId)))
-        filters.$or = [
-          { request_number: { $ilike: like } },
-          { customer_name: { $ilike: like } },
-          { customer_nip: { $ilike: like } },
-          { request_text: { $ilike: like } },
-          ...(searchRequestIds.length > 0 ? [{ id: { $in: searchRequestIds } }] : []),
-        ]
+        const directRequestIds = directRequestMatches.map((entry) => entry.id)
+        const itemRequestIds = searchItemMatches.map((item) => item.requestId)
+        const searchRequestIds = Array.from(new Set([...directRequestIds, ...itemRequestIds]))
+        requestIdCandidates = intersectIdCandidates(requestIdCandidates, searchRequestIds)
       }
       if (query.createdFrom || query.createdTo) {
         const range: Record<string, Date> = {}
@@ -122,23 +135,26 @@ const crud = makeCrudRoute({
           if (!Number.isNaN(date.getTime())) range.$lte = date
         }
         if (Object.keys(range).length) filters.created_at = range
-      }
-      if (query.itemStatus || query.sku || query.referenceNumber) {
-        const em = (ctx.container.resolve('em') as EntityManager).fork()
-        const itemWhere: Record<string, unknown> = {
-          tenantId: ctx.auth?.tenantId ?? null,
-          organizationId: ctx.selectedOrganizationId ?? ctx.auth?.orgId ?? null,
-          deletedAt: null,
         }
-        if (query.itemStatus) {
-          const itemStatuses = resolveItemStatusFilterValues(query.itemStatus)
-          itemWhere.itemStatus = itemStatuses.length > 1 ? { $in: itemStatuses } : itemStatuses[0]
+        if (query.itemStatus || query.sku || query.referenceNumber) {
+          const em = (ctx.container.resolve('em') as EntityManager).fork()
+          const itemWhere: Record<string, unknown> = {
+            tenantId: ctx.auth?.tenantId ?? null,
+            organizationId: ctx.selectedOrganizationId ?? ctx.auth?.orgId ?? null,
+            deletedAt: null,
+          }
+          if (query.itemStatus) {
+            const itemStatuses = resolveItemStatusFilterValues(query.itemStatus)
+            itemWhere.itemStatus = itemStatuses.length > 1 ? { $in: itemStatuses } : itemStatuses[0]
+          }
+          if (query.sku) itemWhere.sku = { $ilike: `%${escapeLikePattern(query.sku)}%` }
+          if (query.referenceNumber) itemWhere.referenceNumber = { $ilike: `%${escapeLikePattern(query.referenceNumber)}%` }
+          const items = await em.find(PurchasingRequestItem, itemWhere as any, { fields: ['requestId'] })
+          const requestIds = Array.from(new Set(items.map((item) => item.requestId)))
+          requestIdCandidates = intersectIdCandidates(requestIdCandidates, requestIds)
         }
-        if (query.sku) itemWhere.sku = { $ilike: `%${escapeLikePattern(query.sku)}%` }
-        if (query.referenceNumber) itemWhere.referenceNumber = { $ilike: `%${escapeLikePattern(query.referenceNumber)}%` }
-        const items = await em.find(PurchasingRequestItem, itemWhere as any, { fields: ['requestId'] })
-        const requestIds = Array.from(new Set(items.map((item) => item.requestId)))
-        filters.id = { $in: requestIds.length > 0 ? requestIds : [NO_MATCH_UUID] }
+      if (requestIdCandidates !== null) {
+        filters.id = { $in: requestIdCandidates.length > 0 ? requestIdCandidates : [NO_MATCH_UUID] }
       }
       return filters
     },
