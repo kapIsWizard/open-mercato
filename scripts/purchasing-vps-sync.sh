@@ -86,6 +86,11 @@ if [[ -n "$PUBLIC_URL" ]]; then
   info "Writing public app URL to $ENV_FILE"
   upsert_env_value "$ENV_FILE" "APP_URL" "$PUBLIC_URL"
   upsert_env_value "$ENV_FILE" "NEXT_PUBLIC_APP_URL" "$PUBLIC_URL"
+  if [[ "$PUBLIC_URL" == https://* ]]; then
+    upsert_env_value "$ENV_FILE" "COOKIE_SECURE" "true"
+  else
+    upsert_env_value "$ENV_FILE" "COOKIE_SECURE" "false"
+  fi
 fi
 
 info "Fetching $REMOTE/$SOURCE_BRANCH"

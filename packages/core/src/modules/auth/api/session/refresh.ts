@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { getAppBaseUrl, toAbsoluteUrl } from '@open-mercato/shared/lib/url'
+import { getAppBaseUrl, shouldUseSecureCookies, toAbsoluteUrl } from '@open-mercato/shared/lib/url'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { AuthService } from '@open-mercato/core/modules/auth/services/authService'
 import { signJwt } from '@open-mercato/shared/lib/auth/jwt'
@@ -39,6 +39,7 @@ function sanitizeRedirect(param: string | null, baseUrl: string): string {
 export async function GET(req: Request) {
   const url = new URL(req.url)
   const baseUrl = getAppBaseUrl(req)
+  const secureCookies = shouldUseSecureCookies(req)
   const redirectTo = sanitizeRedirect(url.searchParams.get('redirect'), baseUrl)
   const token = parseCookie(req, 'session_token')
   if (!token) return NextResponse.redirect(toAbsoluteUrl(req, '/login?redirect=' + encodeURIComponent(redirectTo)))
@@ -49,12 +50,13 @@ export async function GET(req: Request) {
   const { user, roles } = ctx
   const jwt = signJwt({ sub: String(user.id), tenantId: String(user.tenantId), orgId: String(user.organizationId), email: user.email, roles })
   const res = NextResponse.redirect(toAbsoluteUrl(req, redirectTo))
-  res.cookies.set('auth_token', jwt, { httpOnly: true, path: '/', sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 60 * 60 * 8 })
+  res.cookies.set('auth_token', jwt, { httpOnly: true, path: '/', sameSite: 'lax', secure: secureCookies, maxAge: 60 * 60 * 8 })
   return res
 }
 
 export async function POST(req: Request) {
   const { translate } = await resolveTranslations()
+  const secureCookies = shouldUseSecureCookies(req)
   let token: string | null = null
 
   try {
@@ -112,7 +114,7 @@ export async function POST(req: Request) {
     httpOnly: true,
     path: '/',
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: secureCookies,
     maxAge: 60 * 60 * 8,
   })
 

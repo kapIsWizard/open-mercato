@@ -21,6 +21,20 @@ function isUsableBaseUrl(value: string | undefined | null, requestOrigin: string
   }
 }
 
+export function isSecureRequest(req: Request): boolean {
+  const forwardedProto = (req.headers.get('x-forwarded-proto') || '').trim().toLowerCase()
+  if (forwardedProto === 'https') return true
+  if (forwardedProto === 'http') return false
+  return new URL(req.url).protocol === 'https:'
+}
+
+export function shouldUseSecureCookies(req: Request): boolean {
+  const forced = (process.env.COOKIE_SECURE || '').trim().toLowerCase()
+  if (forced === 'true') return true
+  if (forced === 'false') return false
+  return isSecureRequest(req)
+}
+
 export function getAppBaseUrl(req: Request): string {
   const url = new URL(req.url)
   const requestOrigin = `${url.protocol}//${url.host}`

@@ -12,6 +12,7 @@ import { User } from '@open-mercato/core/modules/auth/data/entities'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { buildPasswordSchema } from '@open-mercato/shared/lib/auth/passwordPolicy'
+import { shouldUseSecureCookies } from '@open-mercato/shared/lib/url'
 
 const profileResponseSchema = z.object({
   email: z.string().email(),
@@ -77,6 +78,7 @@ export async function GET(req: Request) {
 
 export async function PUT(req: Request) {
   const { translate } = await resolveTranslations()
+  const secureCookies = shouldUseSecureCookies(req)
   const auth = await getAuthFromRequest(req)
   if (!auth?.sub) {
     return NextResponse.json({ error: translate('api.errors.unauthorized', 'Unauthorized') }, { status: 401 })
@@ -121,7 +123,7 @@ export async function PUT(req: Request) {
       httpOnly: true,
       path: '/',
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: secureCookies,
       maxAge: 60 * 60 * 8,
     })
     return res

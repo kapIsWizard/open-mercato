@@ -6,6 +6,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { AuthService } from '@open-mercato/core/modules/auth/services/authService'
 import { signJwt } from '@open-mercato/shared/lib/auth/jwt'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import { shouldUseSecureCookies } from '@open-mercato/shared/lib/url'
 import type { EventBus } from '@open-mercato/events/types'
 import { parseBooleanToken } from '@open-mercato/shared/lib/boolean'
 import { emitAuthEvent } from '@open-mercato/core/modules/auth/events'
@@ -114,11 +115,12 @@ export async function POST(req: Request) {
     responseData.refreshToken = sess.token
   }
   const res = NextResponse.json(responseData)
-  res.cookies.set('auth_token', token, { httpOnly: true, path: '/', sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 60 * 60 * 8 })
+  const secureCookies = shouldUseSecureCookies(req)
+  res.cookies.set('auth_token', token, { httpOnly: true, path: '/', sameSite: 'lax', secure: secureCookies, maxAge: 60 * 60 * 8 })
   if (remember && responseData.refreshToken) {
     const days = Number(process.env.REMEMBER_ME_DAYS || '30')
     const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000)
-    res.cookies.set('session_token', responseData.refreshToken, { httpOnly: true, path: '/', sameSite: 'lax', secure: process.env.NODE_ENV === 'production', expires: expiresAt })
+    res.cookies.set('session_token', responseData.refreshToken, { httpOnly: true, path: '/', sameSite: 'lax', secure: secureCookies, expires: expiresAt })
   }
   return res
 }
