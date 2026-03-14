@@ -79,6 +79,12 @@ function sanitizeClientRedirect(param: string | null): string | null {
   return value
 }
 
+function hardRedirect(target: string | null | undefined) {
+  if (typeof window === 'undefined') return
+  const value = sanitizeClientRedirect(target || null) || '/'
+  window.location.assign(value)
+}
+
 function extractJwtRoles(token: unknown): string[] {
   if (typeof token !== 'string' || !token) return []
   const parts = token.split('.')
@@ -216,7 +222,7 @@ export default function LoginPage() {
       if (res.redirected) {
         clearAllOperations()
         // NextResponse.redirect from API
-        router.replace(res.url)
+        window.location.assign(res.url)
         return
       }
       if (!res.ok) {
@@ -268,16 +274,16 @@ export default function LoginPage() {
       const data = await res.json().catch(() => null)
       clearAllOperations()
       if (fallbackRedirect) {
-        router.replace(fallbackRedirect)
+        hardRedirect(fallbackRedirect)
         return
       }
       const tokenRoles = extractJwtRoles(data?.token)
       if (requestedRedirect === '/backend' && tokenRoles.includes('employee')) {
-        router.replace('/backend/purchasing/requests')
+        hardRedirect('/backend/purchasing/requests')
         return
       }
       if (data && data.redirect) {
-        router.replace(data.redirect)
+        hardRedirect(data.redirect)
       }
     } catch (err: unknown) {
       // Handle any errors thrown (e.g., network errors or thrown exceptions)
