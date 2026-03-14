@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { toAbsoluteUrl } from '@open-mercato/shared/lib/url'
+import { getAppBaseUrl, toAbsoluteUrl } from '@open-mercato/shared/lib/url'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { AuthService } from '@open-mercato/core/modules/auth/services/authService'
 import { signJwt } from '@open-mercato/shared/lib/auth/jwt'
@@ -38,7 +38,7 @@ function sanitizeRedirect(param: string | null, baseUrl: string): string {
 
 export async function GET(req: Request) {
   const url = new URL(req.url)
-  const baseUrl = process.env.APP_URL || `${url.protocol}//${url.host}`
+  const baseUrl = getAppBaseUrl(req)
   const redirectTo = sanitizeRedirect(url.searchParams.get('redirect'), baseUrl)
   const token = parseCookie(req, 'session_token')
   if (!token) return NextResponse.redirect(toAbsoluteUrl(req, '/login?redirect=' + encodeURIComponent(redirectTo)))

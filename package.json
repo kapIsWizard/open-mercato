@@ -33,6 +33,7 @@
     "clean:generated": "./scripts/clean-generated.sh",
     "clean:packages": "./scripts/clean-packages.sh",
     "clean": "yarn clean:generated && yarn clean:packages",
+    "ops:purchasing:vps": "bash ./scripts/purchasing-vps-sync.sh",
     "install-skills": "./scripts/install-skills.sh",
     "mcp:serve": "turbo run mcp:serve --filter=@open-mercato/ai-assistant",
     "mcp:dev": "turbo run mcp:dev --filter=@open-mercato/ai-assistant",
