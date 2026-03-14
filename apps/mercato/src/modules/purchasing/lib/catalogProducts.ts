@@ -116,8 +116,39 @@ print(json.dumps(rows, ensure_ascii=False))
   return normalizeImportedRows(parsed, filePath)
 }
 
+function scoreDecodedCsvCandidate(value: string): number {
+  const replacementMatches = value.match(/\uFFFD/g) ?? []
+  const suspiciousMatches = value.match(/[ÃÅ�]/g) ?? []
+  const polishMatches = value.match(/[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/g) ?? []
+  const headerPenalty =
+    value.includes('Symbol;') && value.includes('Nazwa;')
+      ? 0
+      : 100
+  return (replacementMatches.length * 100) + (suspiciousMatches.length * 10) - polishMatches.length + headerPenalty
+}
+
+function decodeCsvBuffer(buffer: Buffer): string {
+  const decoders = [
+    new TextDecoder('utf-8', { fatal: false }),
+    new TextDecoder('windows-1250', { fatal: false }),
+    new TextDecoder('iso-8859-2', { fatal: false }),
+    new TextDecoder('ibm852', { fatal: false }),
+  ]
+  let best = ''
+  let bestScore = Number.POSITIVE_INFINITY
+  for (const decoder of decoders) {
+    const decoded = decoder.decode(buffer)
+    const score = scoreDecodedCsvCandidate(decoded)
+    if (score < bestScore) {
+      best = decoded
+      bestScore = score
+    }
+  }
+  return best
+}
+
 function parseFallbackCsv(filePath: string): ImportedCatalogProductRow[] {
-  const content = readFileSync(filePath, 'utf8')
+  const content = decodeCsvBuffer(readFileSync(filePath))
   const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0)
   if (lines.length < 2) return []
   const headers = lines[0]!.split(';').map((value) => value.trim())
