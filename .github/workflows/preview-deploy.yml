@@ -163,7 +163,7 @@ jobs:
                 --arg name "$DEPLOY_ENV" \
                 --arg projectId "$DOKPLOY_PROJECT_ID" \
                 --arg environmentId "$DOKPLOY_ENVIRONMENT_ID" \
-                '{name: $name, projectId: $projectId, environmentId: $environmentId, composeType: "docker-compose"}')")
+                '{name: $name, projectId: $projectId, environmentId: $environmentId, composeType: "docker-compose", sourceType: "raw"}')")
 
             COMPOSE_ID=$(echo "$RESP" | jq -r '.composeId')
             if [[ -z "$COMPOSE_ID" || "$COMPOSE_ID" == "null" ]]; then
@@ -184,7 +184,7 @@ jobs:
               --arg composeId "$COMPOSE_ID" \
               --arg env "$ENV_CONTENT" \
               --arg composeFile "$COMPOSE_FILE" \
-              '{composeId: $composeId, env: $env, composeFile: $composeFile}')"
+              '{composeId: $composeId, env: $env, composeFile: $composeFile, sourceType: "raw"}')"
 
           # Trigger deploy
           curl -fsS -X POST "${DOKPLOY_URL}/api/compose.deploy" \
