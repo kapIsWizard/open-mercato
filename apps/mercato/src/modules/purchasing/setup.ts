@@ -41,7 +41,7 @@ async function ensureTenantRole(em: EntityManager, tenantId: string, name: strin
 }
 
 async function disableTenantRoleAcl(em: EntityManager, tenantId: string, role: Role) {
-  const acls = await em.find(RoleAcl, { role, tenantId, deletedAt: null })
+  const acls = await em.find(RoleAcl, { role: role.id, tenantId, deletedAt: null } as never)
   for (const acl of acls) {
     acl.deletedAt = new Date()
   }

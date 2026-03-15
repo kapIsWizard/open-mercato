@@ -69,7 +69,7 @@ jobs:
           SHA="${{ github.event.pull_request.head.sha }}"
           SHORT_SHA="${SHA:0:7}"
           DEPLOY_ENV="pr-${PR}"
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          IMAGE="${{ env.REGISTRY }}/$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')"
 
           echo "pr=$PR"                                      >> "$GITHUB_OUTPUT"
           echo "deploy_env=$DEPLOY_ENV"                     >> "$GITHUB_OUTPUT"
