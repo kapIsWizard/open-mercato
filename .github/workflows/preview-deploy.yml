@@ -154,7 +154,7 @@ jobs:
           EOF
           )
 
-          if [[ -z "$EXISTING_COMPOSE_ID" ]]; then
+          create_compose_stack() {
             echo "Creating new compose stack: ${DEPLOY_ENV}"
             RESP=$(curl -fsS -X POST "${DOKPLOY_URL}/api/compose.create" \
               -H "x-api-key: ${DOKPLOY_API_KEY}" \
@@ -164,16 +164,28 @@ jobs:
                 --arg projectId "$DOKPLOY_PROJECT_ID" \
                 --arg environmentId "$DOKPLOY_ENVIRONMENT_ID" \
                 '{name: $name, projectId: $projectId, environmentId: $environmentId, composeType: "docker-compose", sourceType: "raw"}')")
-
             COMPOSE_ID=$(echo "$RESP" | jq -r '.composeId')
             if [[ -z "$COMPOSE_ID" || "$COMPOSE_ID" == "null" ]]; then
               echo "Failed to create compose stack. Response: $RESP" >&2
               exit 1
             fi
             echo "Created compose stack: ${COMPOSE_ID}"
+          }
+
+          if [[ -z "$EXISTING_COMPOSE_ID" ]]; then
+            create_compose_stack
           else
-            COMPOSE_ID="$EXISTING_COMPOSE_ID"
-            echo "Updating existing compose stack: ${COMPOSE_ID}"
+            # Verify the existing stack still exists; recreate if stale
+            STATUS=$(curl -o /dev/null -w "%{http_code}" -s \
+              -H "x-api-key: ${DOKPLOY_API_KEY}" \
+              "${DOKPLOY_URL}/api/compose.one?composeId=${EXISTING_COMPOSE_ID}")
+            if [[ "$STATUS" == "200" ]]; then
+              COMPOSE_ID="$EXISTING_COMPOSE_ID"
+              echo "Updating existing compose stack: ${COMPOSE_ID}"
+            else
+              echo "Stale compose ID (HTTP ${STATUS}), recreating..."
+              create_compose_stack
+            fi
           fi
 
           # Update compose file content and env vars
