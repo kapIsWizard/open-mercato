@@ -4,6 +4,7 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
+import { ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { DataTable, withDataTableNamespaces } from '@open-mercato/ui/backend/DataTable'
 import { Badge } from '@open-mercato/ui/primitives/badge'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -15,6 +16,7 @@ import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuarde
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { cn } from '@open-mercato/shared/lib/utils'
+import { canViewPurchasingOperationalItems } from '../../../lib/roleAccess'
 import { itemStatusViewValues, normalizeItemStatusForView, resolveItemStatusClassName, resolveItemStatusVariant } from '../../../lib/statuses'
 
 const PAGE_SIZE = 50
@@ -38,6 +40,10 @@ type ItemResponse = {
   totalPages?: number
 }
 
+type FeatureCheckResponse = {
+  roles?: string[]
+}
+
 export default function PurchasingRequestItemsPage() {
   const t = useT()
   const router = useRouter()
@@ -58,6 +64,9 @@ export default function PurchasingRequestItemsPage() {
   const [selectedIds, setSelectedIds] = React.useState<string[]>([])
   const [bulkStatus, setBulkStatus] = React.useState('')
   const [isApplyingBulkStatus, setIsApplyingBulkStatus] = React.useState(false)
+  const [roleNames, setRoleNames] = React.useState<string[]>([])
+  const [rolesLoaded, setRolesLoaded] = React.useState(false)
+  const canAccessOperationalItems = React.useMemo(() => canViewPurchasingOperationalItems(roleNames), [roleNames])
 
   const labels = React.useMemo(() => ({
     title: t('purchasing.items.page.title', 'Purchasing items'),
@@ -225,8 +234,43 @@ export default function PurchasingRequestItemsPage() {
   }, [labels.errors.load, page, referenceFilter, search, skuFilter, sorting, statusFilter])
 
   React.useEffect(() => {
+    let cancelled = false
+    async function loadRoles() {
+      try {
+        const payload = await readApiResultOrThrow<FeatureCheckResponse>(
+          '/api/auth/feature-check',
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ features: [] }),
+          },
+        )
+        if (!cancelled) {
+          setRoleNames(Array.isArray(payload.roles) ? payload.roles : [])
+          setRolesLoaded(true)
+        }
+      } catch {
+        if (!cancelled) {
+          setRoleNames([])
+          setRolesLoaded(true)
+        }
+      }
+    }
+    void loadRoles()
+    return () => { cancelled = true }
+  }, [])
+
+  React.useEffect(() => {
+    if (!rolesLoaded) return
+    if (!canAccessOperationalItems) {
+      setRows([])
+      setTotal(0)
+      setTotalPages(1)
+      setIsLoading(false)
+      return
+    }
     void loadRows()
-  }, [loadRows, scopeVersion])
+  }, [canAccessOperationalItems, loadRows, scopeVersion])
 
   React.useEffect(() => {
     setSelectedIds((current) => current.filter((id) => rows.some((row) => row.id === id)))
@@ -285,6 +329,10 @@ export default function PurchasingRequestItemsPage() {
   return (
     <Page>
       <PageBody>
+        {rolesLoaded && !canAccessOperationalItems ? (
+          <ErrorMessage label={t('purchasing.items.errors.forbidden', 'You do not have access to operational purchasing items.')} />
+        ) : null}
+        {!rolesLoaded ? null : canAccessOperationalItems ? (
         <div className="space-y-6" data-testid="purchasing-items-page">
           <section className="rounded-lg border bg-card p-4 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -423,6 +471,7 @@ export default function PurchasingRequestItemsPage() {
             />
           </div>
         </div>
+        ) : null}
       </PageBody>
     </Page>
   )

@@ -27,17 +27,21 @@ export async function getAuthToken(
 
   let lastStatus = 0;
 
+  let rateLimitRetried = false;
+
   for (const attempt of credentialAttempts) {
     const form = new URLSearchParams();
     form.set('email', attempt.email);
     form.set('password', attempt.password);
 
-    const response = await request.post(resolveUrl('/api/auth/login'), {
+    const executeLogin = async () => request.post(resolveUrl('/api/auth/login'), {
       headers: {
         'content-type': 'application/x-www-form-urlencoded',
       },
       data: form.toString(),
     });
+
+    let response = await executeLogin();
 
     const raw = await response.text();
     let body: Record<string, unknown> | null = null;
@@ -48,6 +52,18 @@ export async function getAuthToken(
     }
 
     lastStatus = response.status();
+    if (lastStatus === 429 && !rateLimitRetried) {
+      rateLimitRetried = true;
+      await new Promise((resolve) => setTimeout(resolve, 65_000));
+      response = await executeLogin();
+      lastStatus = response.status();
+      const retryRaw = await response.text();
+      try {
+        body = retryRaw ? (JSON.parse(retryRaw) as Record<string, unknown>) : null;
+      } catch {
+        body = null;
+      }
+    }
     if (response.ok() && body && typeof body.token === 'string' && body.token) {
       return body.token;
     }

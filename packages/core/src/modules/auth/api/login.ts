@@ -25,6 +25,20 @@ export const metadata = {}
 
 // validation comes from userLoginSchema
 
+function resolveDefaultLoginRedirect(roleNames: string[]): string {
+  const normalized = new Set(roleNames.map((role) => role.trim()).filter(Boolean))
+  if (normalized.has('superadmin') || normalized.has('admin')) return '/backend'
+  if (
+    normalized.has('purchasing')
+    || normalized.has('sales')
+    || normalized.has('bok')
+    || normalized.has('employee')
+  ) {
+    return '/backend/purchasing/requests'
+  }
+  return '/backend'
+}
+
 export async function POST(req: Request) {
   const { translate } = await resolveTranslations()
   const form = await req.formData()
@@ -106,7 +120,7 @@ export async function POST(req: Request) {
   const responseData: { ok: true; token: string; redirect: string; refreshToken?: string } = {
     ok: true,
     token,
-    redirect: '/backend',
+    redirect: resolveDefaultLoginRedirect(userRoleNames),
   }
   if (remember) {
     const days = Number(process.env.REMEMBER_ME_DAYS || '30')

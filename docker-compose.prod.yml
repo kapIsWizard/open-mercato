@@ -1,0 +1,122 @@
+services:
+  app:
+    image: open-mercato/app:local
+    user: "0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /tmp/init-marker/.seeded ]; then
+          yarn mercato init && mkdir -p /tmp/init-marker && touch /tmp/init-marker/.seeded
+        else
+          yarn db:migrate
+        fi && yarn start
+    volumes:
+      - init_marker:/tmp/init-marker
+      - attachments_storage:/app/apps/mercato/storage
+    working_dir: /app/apps/mercato
+    environment:
+      NODE_ENV: production
+      DEPLOY_ENV: prod
+      PORT: 3000
+      TENANT_DATA_ENCRYPTION: "true"
+      TENANT_DATA_ENCRYPTION_FALLBACK_KEY: ${TENANT_DATA_ENCRYPTION_FALLBACK_KEY}
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      APP_URL: https://omdevs.net
+      COOKIE_SECURE: "true"
+      CACHE_REDIS_URL: redis://mercato-redis-prod:6379
+      CACHE_STRATEGY: redis
+      ENABLE_CRUD_API_CACHE: "true"
+      MEILISEARCH_HOST: http://mercato-meilisearch-prod:7700
+      MEILISEARCH_API_KEY: ${MEILISEARCH_MASTER_KEY}
+      DEMO_MODE: "true"
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      OM_INIT_SUPERADMIN_EMAIL: ${OM_INIT_SUPERADMIN_EMAIL}
+      OM_INIT_SUPERADMIN_PASSWORD: ${OM_INIT_SUPERADMIN_PASSWORD}
+      SSO_FORCE_ROLE_ON_LOGIN: employee
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mercato-prod.rule=Host(`omdevs.net`)"
+      - "traefik.http.routers.mercato-prod.entrypoints=websecure"
+      - "traefik.http.routers.mercato-prod.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mercato-prod.loadbalancer.server.port=3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    networks:
+      - mercato-network
+      - dokploy-network
+
+  postgres:
+    image: pgvector/pgvector:pg17-trixie
+    container_name: mercato-postgres-prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: open-mercato
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mercato-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: mercato-redis-prod
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mercato-network
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    container_name: mercato-meilisearch-prod
+    restart: unless-stopped
+    environment:
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: ${MEILISEARCH_MASTER_KEY}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch_data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mercato-network
+
+volumes:
+  postgres_data:
+    name: mercato-postgres-data-prod
+  redis_data:
+    name: mercato-redis-data-prod
+  meilisearch_data:
+    name: mercato-meilisearch-data-prod
+  init_marker:
+    name: mercato-init-marker-prod
+  attachments_storage:
+    name: mercato-attachments-storage-prod
+
+networks:
+  mercato-network:
+    name: mercato-network-prod
+    driver: bridge
+  dokploy-network:
+    external: true
+    name: dokploy-network

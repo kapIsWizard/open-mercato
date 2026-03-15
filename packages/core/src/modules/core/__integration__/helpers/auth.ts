@@ -138,8 +138,11 @@ export async function login(page: Page, role: Role = 'admin'): Promise<void> {
     data: apiLoginForm.toString(),
   }).catch(() => null);
   if (apiLoginResponse?.ok()) {
-    const apiLoginBody = (await apiLoginResponse.json().catch(() => null)) as { token?: string } | null;
+    const apiLoginBody = (await apiLoginResponse.json().catch(() => null)) as { token?: string; redirect?: string } | null;
     const claims = typeof apiLoginBody?.token === 'string' ? decodeJwtClaims(apiLoginBody.token) : null;
+    const redirectPath = typeof apiLoginBody?.redirect === 'string' && apiLoginBody.redirect.trim().length > 0
+      ? apiLoginBody.redirect
+      : '/backend';
     const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
     const cookies = [];
     if (claims?.tenantId) {
@@ -161,7 +164,7 @@ export async function login(page: Page, role: Role = 'admin'): Promise<void> {
     if (cookies.length > 0) {
       await page.context().addCookies(cookies);
     }
-    await page.goto('/backend', { waitUntil: 'domcontentloaded' });
+    await page.goto(redirectPath, { waitUntil: 'domcontentloaded' });
     if (await waitForBackend(8_000)) return;
   }
 

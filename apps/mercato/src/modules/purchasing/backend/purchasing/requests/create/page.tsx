@@ -7,23 +7,29 @@ import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { AttachmentsSection } from '@open-mercato/ui/backend/detail'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@open-mercato/ui/primitives/tabs'
 import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { apiCall, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { cn } from '@open-mercato/shared/lib/utils'
+import { canUseExpandedPurchasingCreate } from '../../../../lib/roleAccess'
 import { CatalogProductLookup, type CatalogProductLookupRow } from '../../../../components/CatalogProductLookup'
-import { CustomerCompanyLookup, type CustomerCompanyLookupOption } from '../../../../components/CustomerCompanyLookup'
+import {
+  CustomerCompanyLookup,
+  CustomerCompanySuggestInput,
+  type CustomerCompanyLookupOption,
+} from '../../../../components/CustomerCompanyLookup'
 import {
   clearFieldError,
   FieldError,
   FieldLabel,
   FormErrorNotice,
+  normalizeCustomerNipInput,
   requiredLabel,
   resolvePurchasingFormError,
   type PurchasingFormErrors,
+  validateCustomerNipField,
   validateCreateRequestForm,
 } from '../../../../lib/requestFormUtils'
 
@@ -31,9 +37,16 @@ type DraftItem = {
   catalogProductId: string | null
   catalogQuery: string
   sku: string
+  unit: string
   referenceNumber: string
   productName: string
   quantity: string
+  purchasingNote: string
+  supplier: string | null
+  group: string | null
+  purchasingAvailability: string | null
+  availableQuantity: number | null
+  unitPriceNet: string | null
 }
 
 type AttachmentListResponse = {
@@ -43,6 +56,7 @@ type AttachmentListResponse = {
 type FeatureCheckResponse = {
   ok?: boolean
   granted?: string[]
+  roles?: string[]
 }
 
 type CreatePagePermissions = {
@@ -65,20 +79,42 @@ export default function PurchasingRequestCreatePage() {
     contextId: 'purchasing.requests.create',
   })
   const [customerCompanyId, setCustomerCompanyId] = React.useState('')
+  const [selectedCustomerCompany, setSelectedCustomerCompany] = React.useState<CustomerCompanyLookupOption | null>(null)
   const [customerNip, setCustomerNip] = React.useState('')
   const [customerName, setCustomerName] = React.useState('')
   const [requestText, setRequestText] = React.useState('')
   const [customerOrderNumber, setCustomerOrderNumber] = React.useState('')
   const [items, setItems] = React.useState<DraftItem[]>([])
-  const [itemsTab, setItemsTab] = React.useState<'catalog' | 'selected'>('catalog')
   const [draftAttachmentRecordId] = React.useState(() => createTemporaryAttachmentRecordId())
   const [permissions, setPermissions] = React.useState<CreatePagePermissions>({
     canViewAttachments: false,
     canManageAttachments: false,
   })
+  const [roleNames, setRoleNames] = React.useState<string[]>([])
   const [isSaving, setIsSaving] = React.useState(false)
   const [fieldErrors, setFieldErrors] = React.useState<PurchasingFormErrors>({})
   const [formError, setFormError] = React.useState<string | null>(null)
+
+  const customerLinkMode = React.useMemo<'linked' | 'new' | 'none'>(() => {
+    const hasName = customerName.trim().length > 0
+    const hasNip = normalizeCustomerNipInput(customerNip).length > 0
+    if (customerCompanyId) return 'linked'
+    if (hasName || hasNip) return 'new'
+    return 'none'
+  }, [customerCompanyId, customerName, customerNip])
+
+  const canUseExpandedCreateFields = React.useMemo(
+    () => canUseExpandedPurchasingCreate(roleNames),
+    [roleNames],
+  )
+
+  const applySelectedCustomerCompany = React.useCallback((next: CustomerCompanyLookupOption | null) => {
+    setSelectedCustomerCompany(next)
+    setCustomerCompanyId(next?.id ?? '')
+    if (next?.displayName) setCustomerName(next.displayName)
+    if (next?.taxId) setCustomerNip(next.taxId)
+    setFieldErrors((current) => clearFieldError(clearFieldError(current, 'customerName'), 'customerNip'))
+  }, [])
 
   React.useEffect(() => {
     let cancelled = false
@@ -91,6 +127,7 @@ export default function PurchasingRequestCreatePage() {
         })
         if (!cancelled) {
           const granted = Array.isArray(featureCheck.result?.granted) ? featureCheck.result.granted : []
+          setRoleNames(Array.isArray(featureCheck.result?.roles) ? featureCheck.result.roles : [])
           setPermissions({
             canViewAttachments: featureCheck.result?.ok === true || granted.includes('attachments.view'),
             canManageAttachments: featureCheck.result?.ok === true || granted.includes('attachments.manage'),
@@ -98,6 +135,7 @@ export default function PurchasingRequestCreatePage() {
         }
       } catch {
         if (!cancelled) {
+          setRoleNames([])
           setPermissions({
             canViewAttachments: false,
             canManageAttachments: false,
@@ -131,7 +169,7 @@ export default function PurchasingRequestCreatePage() {
 
     const payload = {
       customerCompanyId: customerCompanyId || null,
-      customerNip: customerNip || null,
+      customerNip: normalizeCustomerNipInput(customerNip) || null,
       customerName: customerName || null,
       requestText: requestText || null,
       customerOrderNumber: customerOrderNumber || null,
@@ -141,6 +179,7 @@ export default function PurchasingRequestCreatePage() {
         productName: item.productName,
         quantity: Number(item.quantity || '0'),
         catalogProductId: item.catalogProductId,
+        purchasingNote: item.purchasingNote || null,
       })),
     }
     setIsSaving(true)
@@ -231,8 +270,14 @@ export default function PurchasingRequestCreatePage() {
           quantity: String(Number.isFinite(nextQuantity) && nextQuantity > 0 ? nextQuantity + quantityToAdd : quantityToAdd),
           catalogQuery: product.title,
           sku: product.sku ?? existingItem.sku,
+          unit: product.unit ?? existingItem.unit,
           referenceNumber: product.referenceNumber ?? existingItem.referenceNumber,
           productName: product.title,
+          supplier: product.supplier ?? existingItem.supplier,
+          group: product.group ?? existingItem.group,
+          purchasingAvailability: product.purchasingAvailability ?? existingItem.purchasingAvailability,
+          availableQuantity: product.availableQuantity ?? existingItem.availableQuantity,
+          unitPriceNet: product.unitPriceNet ?? existingItem.unitPriceNet,
         }
         return [updatedItem, ...current.filter((_, index) => index !== existingIndex)]
       }
@@ -241,37 +286,19 @@ export default function PurchasingRequestCreatePage() {
           catalogProductId: product.id,
           catalogQuery: product.title,
           sku: product.sku ?? '',
+          unit: product.unit ?? '',
           referenceNumber: product.referenceNumber ?? '',
           productName: product.title,
           quantity: String(quantityToAdd),
+          purchasingNote: '',
+          supplier: product.supplier ?? null,
+          group: product.group ?? null,
+          purchasingAvailability: product.purchasingAvailability ?? null,
+          availableQuantity: product.availableQuantity ?? null,
+          unitPriceNet: product.unitPriceNet ?? null,
         },
         ...current,
       ]
-    })
-    setItemsTab('selected')
-  }, [])
-
-  const updateDraftItem = React.useCallback((indexToUpdate: number, patch: Partial<DraftItem>) => {
-    setItems((current) => current.map((entry, entryIndex) => entryIndex === indexToUpdate ? { ...entry, ...patch } : entry))
-  }, [])
-
-  const removeDraftItem = React.useCallback((indexToRemove: number) => {
-    setItems((current) => current.filter((_, index) => index !== indexToRemove))
-    setFieldErrors((current) => {
-      const next: PurchasingFormErrors = {}
-      for (const [key, value] of Object.entries(current)) {
-        if (key.startsWith(`items.${indexToRemove}.`)) continue
-        const match = key.match(/^items\.(\d+)\.(.+)$/)
-        if (!match) {
-          next[key] = value
-          continue
-        }
-        const originalIndex = Number(match[1])
-        const field = match[2]
-        const mappedIndex = originalIndex > indexToRemove ? originalIndex - 1 : originalIndex
-        next[`items.${mappedIndex}.${field}`] = value
-      }
-      return next
     })
   }, [])
 
@@ -301,6 +328,27 @@ export default function PurchasingRequestCreatePage() {
     })
   }, [items])
 
+  const updateDraftItemByProductId = React.useCallback((catalogProductId: string, patch: Partial<Pick<DraftItem, 'quantity' | 'purchasingNote'>>) => {
+    setItems((current) => {
+      const existingIndex = current.findIndex((item) => item.catalogProductId === catalogProductId)
+      if (existingIndex < 0) return current
+      return current.map((entry, entryIndex) => (
+        entryIndex === existingIndex
+          ? { ...entry, ...patch }
+          : entry
+      ))
+    })
+    setFieldErrors((current) => {
+      const itemIndex = items.findIndex((item) => item.catalogProductId === catalogProductId)
+      if (itemIndex < 0) return current
+      let next = current
+      if (patch.quantity !== undefined) {
+        next = clearFieldError(next, `items.${itemIndex}.quantity`)
+      }
+      return next
+    })
+  }, [items])
+
   return (
     <Page>
       <PageBody>
@@ -319,200 +367,169 @@ export default function PurchasingRequestCreatePage() {
                 <p className="mt-1 text-sm text-muted-foreground">
                   {t('purchasing.validation.customerHint', 'Link an existing Open Mercato company or provide customer name / NIP so purchasing can identify the request.')}
                 </p>
+                {customerLinkMode !== 'none' ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <div
+                      className={cn(
+                        'inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium',
+                        customerLinkMode === 'linked'
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                          : 'border-amber-200 bg-amber-50 text-amber-700',
+                      )}
+                    >
+                      {customerLinkMode === 'linked'
+                        ? t('purchasing.requests.create.customerLinkState.linked', 'Linked to an existing Open Mercato company')
+                        : t('purchasing.requests.create.customerLinkState.new', 'A new Open Mercato company will be created on save')}
+                    </div>
+                    {customerLinkMode === 'linked' ? (
+                      <span className="text-xs text-muted-foreground">
+                        {t('purchasing.requests.create.customerLinkState.linkedHint', 'Editing the customer name or NIP will switch this request back to a new company.')}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2 md:col-span-2">
                   <FieldLabel>{t('purchasing.requests.fields.customerCompany', 'Open Mercato company')}</FieldLabel>
                   <CustomerCompanyLookup
                     value={customerCompanyId}
+                    selectedOption={selectedCustomerCompany}
                     disabled={isSaving}
-                    onChange={(next: CustomerCompanyLookupOption | null) => {
-                      setCustomerCompanyId(next?.id ?? '')
-                      if (next?.displayName) {
-                        setCustomerName(next.displayName)
-                      }
-                      setFieldErrors((current) => clearFieldError(clearFieldError(current, 'customerName'), 'customerNip'))
-                    }}
+                    onChange={applySelectedCustomerCompany}
                   />
                 </div>
                 <div className="space-y-2">
                   <FieldLabel>{t('purchasing.requests.fields.customerNip', 'Customer NIP')}</FieldLabel>
-                  <Input
+                  <CustomerCompanySuggestInput
                     data-testid="purchasing-create-customer-nip"
                     value={customerNip}
-                    onChange={(event) => {
-                      setCustomerNip(event.target.value)
+                    mode="taxId"
+                    onValueChange={(next) => {
+                      setCustomerNip(normalizeCustomerNipInput(next))
+                      setSelectedCustomerCompany(null)
+                      setCustomerCompanyId('')
                       setFieldErrors((current) => clearFieldError(clearFieldError(current, 'customerNip'), 'customerName'))
                     }}
+                    onSelectCompany={applySelectedCustomerCompany}
+                    onBlur={() => {
+                      const message = validateCustomerNipField(customerNip, t)
+                      setFieldErrors((current) => {
+                        const next = clearFieldError(current, 'customerNip')
+                        return message ? { ...next, customerNip: message } : next
+                      })
+                    }}
                     placeholder="1234567890"
-                    aria-invalid={fieldErrors.customerNip ? 'true' : 'false'}
+                    ariaInvalid={Boolean(fieldErrors.customerNip)}
                     className={cn(fieldErrors.customerNip ? 'border-destructive focus-visible:ring-destructive/30' : null)}
+                    disabled={isSaving}
                   />
                   <FieldError message={fieldErrors.customerNip} />
                 </div>
                 <div className="space-y-2">
                   <FieldLabel>{requiredLabel(t('purchasing.requests.fields.customerName', 'Customer name'), t)}</FieldLabel>
-                  <Input
+                  <CustomerCompanySuggestInput
                     data-testid="purchasing-create-customer-name"
                     value={customerName}
-                    onChange={(event) => {
-                      setCustomerName(event.target.value)
+                    mode="displayName"
+                    onValueChange={(next) => {
+                      setCustomerName(next)
+                      setSelectedCustomerCompany(null)
+                      setCustomerCompanyId('')
                       setFieldErrors((current) => clearFieldError(clearFieldError(current, 'customerName'), 'customerNip'))
                     }}
+                    onSelectCompany={applySelectedCustomerCompany}
                     placeholder={t('purchasing.requests.fields.customerNamePlaceholder', 'Customer company name')}
-                    aria-invalid={fieldErrors.customerName ? 'true' : 'false'}
+                    ariaInvalid={Boolean(fieldErrors.customerName)}
                     className={cn(fieldErrors.customerName ? 'border-destructive focus-visible:ring-destructive/30' : null)}
+                    disabled={isSaving}
                   />
                   <FieldError message={fieldErrors.customerName} />
                 </div>
               </div>
             </section>
 
-            <section className="space-y-4 rounded-lg border bg-card p-4">
-              <div>
-                <h2 className="text-lg font-semibold">{t('purchasing.requests.create.detailsSectionTitle', 'Request details')}</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {t('purchasing.requests.create.detailsSectionDescription', 'Capture the customer order reference and the raw request context in one place.')}
-                </p>
-              </div>
-              <div className="grid gap-4">
-                <div className="space-y-2">
-                  <FieldLabel>{t('purchasing.requests.fields.customerOrderNumber', 'Customer order number')}</FieldLabel>
-                  <Input data-testid="purchasing-create-customer-order-number" value={customerOrderNumber} onChange={(event) => setCustomerOrderNumber(event.target.value)} />
-                </div>
-                <div className="space-y-2">
-                  <FieldLabel>{t('purchasing.requests.fields.requestText', 'Request text')}</FieldLabel>
-                  <Textarea data-testid="purchasing-create-request-text" value={requestText} onChange={(event) => setRequestText(event.target.value)} rows={5} placeholder={t('purchasing.requests.fields.requestTextPlaceholder', 'Paste the raw customer request here.')} />
-                </div>
-              </div>
-            </section>
+            <div className={cn('grid gap-6 lg:items-start', canUseExpandedCreateFields && permissions.canViewAttachments && permissions.canManageAttachments ? 'lg:grid-cols-2' : null)}>
+              {canUseExpandedCreateFields ? (
+                <section className="space-y-4 rounded-lg border bg-card p-4">
+                  <div>
+                    <h2 className="text-lg font-semibold">{t('purchasing.requests.create.detailsSectionTitle', 'Request details')}</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {t('purchasing.requests.create.detailsSectionDescription', 'Capture the customer order reference and the raw request context in one place.')}
+                    </p>
+                  </div>
+                  <div className="grid gap-4">
+                    <div className="space-y-2">
+                      <FieldLabel>{t('purchasing.requests.fields.customerOrderNumber', 'Customer order number')}</FieldLabel>
+                      <Input data-testid="purchasing-create-customer-order-number" value={customerOrderNumber} onChange={(event) => setCustomerOrderNumber(event.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <FieldLabel>{t('purchasing.requests.fields.requestText', 'Request text')}</FieldLabel>
+                      <Textarea data-testid="purchasing-create-request-text" value={requestText} onChange={(event) => setRequestText(event.target.value)} rows={5} placeholder={t('purchasing.requests.fields.requestTextPlaceholder', 'Paste the raw customer request here.')} />
+                    </div>
+                  </div>
+                </section>
+              ) : null}
 
-            {permissions.canViewAttachments && permissions.canManageAttachments ? (
-              <section className="space-y-4 rounded-lg border bg-card p-4" data-testid="purchasing-create-attachments-section">
-                <div>
-                  <h3 className="text-base font-semibold">{t('purchasing.attachments.request.title', 'Request attachments')}</h3>
-                  <p className="text-sm text-muted-foreground">
-                    {t('purchasing.attachments.request.description', 'Add screenshots, competitor offers, or customer files before creating the request.')}
-                  </p>
-                </div>
-                <AttachmentsSection
-                  entityId={E.purchasing.purchasing_request}
-                  recordId={draftAttachmentRecordId}
-                  title={t('purchasing.attachments.request.title', 'Request attachments')}
-                  description={t('purchasing.attachments.request.description', 'Add screenshots, competitor offers, or customer files before creating the request.')}
-                  showHeader={false}
-                />
-              </section>
-            ) : null}
+              {permissions.canViewAttachments && permissions.canManageAttachments ? (
+                <section className="space-y-4 rounded-lg border bg-card p-4" data-testid="purchasing-create-attachments-section">
+                  <div>
+                    <h3 className="text-base font-semibold">{t('purchasing.attachments.request.title', 'Request attachments')}</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {t('purchasing.attachments.request.description', 'Add screenshots, competitor offers, or customer files before creating the request.')}
+                    </p>
+                  </div>
+                  <AttachmentsSection
+                    entityId={E.purchasing.purchasing_request}
+                    recordId={draftAttachmentRecordId}
+                    title={t('purchasing.attachments.request.title', 'Request attachments')}
+                    description={t('purchasing.attachments.request.description', 'Add screenshots, competitor offers, or customer files before creating the request.')}
+                    showHeader={false}
+                  />
+                </section>
+              ) : null}
+            </div>
           </section>
 
           <section className="space-y-4 rounded-lg border bg-card p-4">
             <div className="flex items-start justify-between gap-4">
-              <div>
+              <div className="flex flex-wrap items-center gap-3">
                 <h2 className="text-lg font-medium">{t('purchasing.items.section.title', 'Request items')}</h2>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  {t('purchasing.validation.itemsRequiredHint', 'Each request needs at least one item with a product name and quantity.')}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => router.push('/backend/purchasing/products')}>
-                  {t('purchasing.products.actions.openBrowser', 'Browse products')}
-                </Button>
-              </div>
-            </div>
-            <FieldError message={fieldErrors.items} />
-            <Tabs value={itemsTab} onValueChange={(value) => setItemsTab(value as 'catalog' | 'selected')} className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-lg bg-muted/40 p-1 sm:w-auto">
-                  <TabsTrigger value="catalog" className="whitespace-nowrap">
-                    {t('purchasing.products.lookup.title', 'Product browser')}
-                  </TabsTrigger>
-                  <TabsTrigger value="selected" className="whitespace-nowrap">
-                    {t('purchasing.items.selected.title', 'Selected products')} ({items.length})
-                  </TabsTrigger>
-                </TabsList>
                 <div className="rounded-full border bg-muted/20 px-3 py-1 text-sm text-muted-foreground">
                   {t('purchasing.items.selected.count', 'Selected: {count}', { count: items.length })}
                 </div>
               </div>
-
-              <TabsContent value="catalog" className="mt-0 space-y-3 rounded-md border bg-muted/10 p-3">
-                <CatalogProductLookup
-                  rowId="create"
-                  selectedProductIds={items.map((item) => item.catalogProductId).filter((value): value is string => typeof value === 'string' && value.length > 0)}
-                  selectedProductQuantities={Object.fromEntries(
-                    items
-                      .filter((item): item is DraftItem & { catalogProductId: string } => typeof item.catalogProductId === 'string' && item.catalogProductId.length > 0)
-                      .map((item) => [item.catalogProductId, item.quantity]),
-                  )}
-                  onPick={addCatalogProductToItems}
-                  onRemove={removeDraftItemByProductId}
-                  disabled={isSaving}
-                  fullWidth
-                />
-              </TabsContent>
-
-              <TabsContent value="selected" className="mt-0 space-y-3" data-testid="purchasing-create-selected-items">
-                {items.length === 0 ? (
-                  <div className="rounded-md border border-dashed px-4 py-6 text-sm text-muted-foreground">
-                    {t('purchasing.items.emptySelection', 'No products selected yet. Use the product browser above to build the request.')}
-                  </div>
-                ) : null}
-                {items.map((item, index) => (
-                  <div key={`item-${index}`} className="space-y-3 rounded-md border p-3" data-testid={`purchasing-create-selected-item-${index}`}>
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="truncate text-sm font-semibold">
-                          {item.productName || item.catalogQuery || t('purchasing.items.fields.productName', 'Product name')}
-                        </div>
-                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                          <span>{t('purchasing.items.fields.sku', 'SKU')}: {item.sku || '—'}</span>
-                          <span>{t('purchasing.items.fields.referenceNumber', 'Reference number')}: {item.referenceNumber || '—'}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 rounded-full border bg-muted/20 px-3 py-1 text-sm text-muted-foreground">
-                        <span>{t('purchasing.products.lookup.orderedQuantity', 'Ordered: {count}', { count: item.quantity || '0' })}</span>
-                      </div>
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px_auto]">
-                      <div className="rounded-md border bg-muted/10 px-3 py-2 text-sm">
-                        <div className="font-medium">{t('purchasing.items.selected.productLocked', 'Product selected from catalog')}</div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {t('purchasing.items.selected.productLockedHint', 'Use the browser tab to add more units of this product or remove it from the request.')}
-                        </div>
-                      </div>
-                      <div className="space-y-2 min-w-0">
-                        <FieldLabel required>{t('purchasing.items.fields.quantity', 'Quantity')}</FieldLabel>
-                        <Input
-                          data-testid={`purchasing-create-item-quantity-${index}`}
-                          type="number"
-                          min="1"
-                          value={item.quantity}
-                          onChange={(event) => {
-                            updateDraftItem(index, { quantity: event.target.value })
-                            setFieldErrors((current) => clearFieldError(current, `items.${index}.quantity`))
-                          }}
-                          placeholder={t('purchasing.items.fields.quantity', 'Quantity')}
-                          aria-invalid={fieldErrors[`items.${index}.quantity`] ? 'true' : 'false'}
-                          className={cn(fieldErrors[`items.${index}.quantity`] ? 'border-destructive focus-visible:ring-destructive/30' : null)}
-                        />
-                        <FieldError message={fieldErrors[`items.${index}.quantity`]} />
-                      </div>
-                      <div className="flex items-end">
-                        <Button
-                          data-testid={`purchasing-create-item-remove-${index}`}
-                          type="button"
-                          variant="ghost"
-                          onClick={() => removeDraftItem(index)}
-                        >
-                          {t('purchasing.items.actions.remove', 'Remove')}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </TabsContent>
-            </Tabs>
+            </div>
+            <p className="text-sm text-muted-foreground">
+                  {t('purchasing.validation.itemsRequiredHint', 'Each request needs at least one item with a product name and quantity.')}
+            </p>
+            <FieldError message={fieldErrors.items} />
+            <div className="rounded-md border bg-muted/10 p-3">
+              <CatalogProductLookup
+                rowId="create"
+                selectedRows={items
+                  .filter((item): item is DraftItem & { catalogProductId: string } => typeof item.catalogProductId === 'string' && item.catalogProductId.length > 0)
+                  .map((item) => ({
+                    id: item.catalogProductId,
+                    sku: item.sku || null,
+                    title: item.productName || item.catalogQuery,
+                    unit: item.unit || null,
+                    referenceNumber: item.referenceNumber || null,
+                    supplier: item.supplier,
+                    group: item.group,
+                    purchasingAvailability: item.purchasingAvailability,
+                    availableQuantity: item.availableQuantity,
+                    unitPriceNet: item.unitPriceNet,
+                    quantity: item.quantity,
+                    purchasingNote: item.purchasingNote,
+                  }))}
+                onPick={addCatalogProductToItems}
+                onRemove={removeDraftItemByProductId}
+                onQuantityChange={(productId, quantity) => updateDraftItemByProductId(productId, { quantity })}
+                onNoteChange={(productId, purchasingNote) => updateDraftItemByProductId(productId, { purchasingNote })}
+                disabled={isSaving}
+              />
+            </div>
           </section>
 
           <div className="flex items-center justify-end gap-3">

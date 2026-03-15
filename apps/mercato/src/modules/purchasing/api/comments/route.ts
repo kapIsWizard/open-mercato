@@ -15,6 +15,8 @@ import {
   createPurchasingPagedListResponseSchema,
   purchasingOkSchema,
 } from '../../openapi'
+import { guardPurchasingAccess } from '../../lib/apiAccess'
+import { canAccessPurchasingModule, canManagePurchasingComments } from '../../lib/roleAccess'
 
 const rawBodySchema = z.object({}).passthrough()
 const deleteActionSchema = z.object({
@@ -25,10 +27,10 @@ const deleteActionSchema = z.object({
 })
 
 const routeMetadata = {
-  GET: { requireAuth: true, requireFeatures: ['purchasing.comments.view'] },
-  POST: { requireAuth: true, requireFeatures: ['purchasing.comments.manage'] },
-  PUT: { requireAuth: true, requireFeatures: ['purchasing.comments.manage'] },
-  DELETE: { requireAuth: true, requireFeatures: ['purchasing.comments.manage'] },
+  GET: { requireAuth: true },
+  POST: { requireAuth: true },
+  PUT: { requireAuth: true },
+  DELETE: { requireAuth: true },
 }
 
 export const metadata = routeMetadata
@@ -140,7 +142,31 @@ const crud = makeCrudRoute({
   },
 })
 
-export const { GET, POST, PUT, DELETE } = crud
+const { GET: crudGET, POST: crudPOST, PUT: crudPUT, DELETE: crudDELETE } = crud
+
+export async function GET(request: Request) {
+  const denied = await guardPurchasingAccess(request, canAccessPurchasingModule)
+  if (denied) return denied
+  return crudGET(request)
+}
+
+export async function POST(request: Request) {
+  const denied = await guardPurchasingAccess(request, canManagePurchasingComments)
+  if (denied) return denied
+  return crudPOST(request)
+}
+
+export async function PUT(request: Request) {
+  const denied = await guardPurchasingAccess(request, canManagePurchasingComments)
+  if (denied) return denied
+  return crudPUT(request)
+}
+
+export async function DELETE(request: Request) {
+  const denied = await guardPurchasingAccess(request, canManagePurchasingComments)
+  if (denied) return denied
+  return crudDELETE(request)
+}
 
 const commentListItemSchema = z.object({
   id: z.string().uuid(),

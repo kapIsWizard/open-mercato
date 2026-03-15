@@ -4,6 +4,7 @@ import * as React from 'react'
 import { Notice } from '@open-mercato/ui/primitives/Notice'
 import { mapCrudServerErrorToFormErrors, type CrudServerFieldErrors } from '@open-mercato/ui/backend/utils/serverErrors'
 import { cn } from '@open-mercato/shared/lib/utils'
+import { isValidPolishTaxId, normalizePolishTaxId, sanitizePolishTaxIdInput } from '@open-mercato/shared/lib/pl/nip'
 
 export type PurchasingFormErrors = CrudServerFieldErrors
 
@@ -56,6 +57,10 @@ export function validateCreateRequestForm(
     fieldErrors.customerName = message
     fieldErrors.customerNip = message
   }
+  const normalizedCustomerNip = normalizePolishTaxId(input.customerNip)
+  if (normalizedCustomerNip && !isValidPolishTaxId(normalizedCustomerNip)) {
+    fieldErrors.customerNip = t('purchasing.validation.customerNipInvalid', 'Enter a valid NIP.')
+  }
 
   if (!input.items.length) {
     fieldErrors.items = t('purchasing.validation.itemsRequired', 'Add at least one request item.')
@@ -91,13 +96,16 @@ export function validateRequestDetailForm(
   t: (key: string, fallback?: string) => string,
 ): { message?: string; fieldErrors: PurchasingFormErrors } {
   const customerName = input.customerName?.trim() ?? ''
-  const customerNip = input.customerNip?.trim() ?? ''
+  const customerNip = normalizePolishTaxId(input.customerNip) ?? ''
   const fieldErrors: PurchasingFormErrors = {}
 
   if (!customerName && !customerNip) {
     const message = t('purchasing.validation.customerRequired', 'Provide customer name or NIP.')
     fieldErrors.customerName = message
     fieldErrors.customerNip = message
+  }
+  if (customerNip && !isValidPolishTaxId(customerNip)) {
+    fieldErrors.customerNip = t('purchasing.validation.customerNipInvalid', 'Enter a valid NIP.')
   }
 
   return {
@@ -107,6 +115,21 @@ export function validateRequestDetailForm(
         : undefined,
     fieldErrors,
   }
+}
+
+export function normalizeCustomerNipInput(value: string | null | undefined): string {
+  return sanitizePolishTaxIdInput(value)
+}
+
+export function validateCustomerNipField(
+  value: string | null | undefined,
+  t: (key: string, fallback?: string) => string,
+): string | undefined {
+  const normalized = normalizePolishTaxId(value)
+  if (!normalized) return undefined
+  return isValidPolishTaxId(normalized)
+    ? undefined
+    : t('purchasing.validation.customerNipInvalid', 'Enter a valid NIP.')
 }
 
 export function validateRequestItemForm(

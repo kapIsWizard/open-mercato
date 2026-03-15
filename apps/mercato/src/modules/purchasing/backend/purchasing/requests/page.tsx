@@ -9,6 +9,7 @@ import { DataTable, withDataTableNamespaces } from '@open-mercato/ui/backend/Dat
 import { Badge } from '@open-mercato/ui/primitives/badge'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
+import { Boxes, ClipboardList, PackageSearch, UserRoundX } from 'lucide-react'
 import { apiCall, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -248,7 +249,38 @@ export default function PurchasingRequestsPage() {
           </section>
 
           <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,4fr)_minmax(280px,1fr)]">
-            <div className="min-w-0 space-y-0">
+            <div className="min-w-0 space-y-4">
+              <section className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+                <RequestMetricCard
+                  label={t('purchasing.requests.metrics.totalRequests', 'Requests')}
+                  value={String(stats.totalRequests)}
+                  icon={ClipboardList}
+                  iconClassName="text-sky-600"
+                  accentClassName="border-sky-200 bg-sky-50/70"
+                />
+                <RequestMetricCard
+                  label={t('purchasing.requests.metrics.totalItems', 'Products in requests')}
+                  value={String(stats.totalItems)}
+                  icon={Boxes}
+                  iconClassName="text-violet-600"
+                  accentClassName="border-violet-200 bg-violet-50/70"
+                />
+                <RequestMetricCard
+                  label={t('purchasing.requests.metrics.unassigned', 'Unassigned')}
+                  value={String(stats.unassigned)}
+                  icon={UserRoundX}
+                  iconClassName="text-amber-600"
+                  accentClassName="border-amber-200 bg-amber-50/70"
+                />
+                <RequestMetricCard
+                  label={t('purchasing.requests.metrics.toHandle', 'Open items')}
+                  value={String(stats.totalOpenItems)}
+                  icon={PackageSearch}
+                  iconClassName="text-emerald-600"
+                  accentClassName="border-emerald-200 bg-emerald-50/70"
+                />
+              </section>
+
               <div className="rounded-lg border bg-card p-2 shadow-sm">
                 <DataTable<RequestRow>
                   title={labels.title}
@@ -279,13 +311,6 @@ export default function PurchasingRequestsPage() {
             </div>
 
             <div className="space-y-4 xl:sticky xl:top-4">
-              <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                <RequestMetricCard label={t('purchasing.requests.metrics.totalRequests', 'Requests')} value={String(stats.totalRequests)} />
-                <RequestMetricCard label={t('purchasing.requests.metrics.totalItems', 'Products in requests')} value={String(stats.totalItems)} />
-                <RequestMetricCard label={t('purchasing.requests.metrics.unassigned', 'Unassigned')} value={String(stats.unassigned)} />
-                <RequestMetricCard label={t('purchasing.requests.metrics.toHandle', 'Open items')} value={String(stats.totalOpenItems)} />
-              </section>
-
               <section className="rounded-lg border bg-card p-4 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -403,11 +428,28 @@ function mapRequestRow(item: Record<string, unknown>): RequestRow {
   return withDataTableNamespaces(row, item)
 }
 
-function RequestMetricCard({ label, value }: { label: string; value: string }) {
+function RequestMetricCard({
+  label,
+  value,
+  icon: Icon,
+  iconClassName,
+  accentClassName,
+}: {
+  label: string
+  value: string
+  icon: React.ComponentType<{ className?: string }>
+  iconClassName: string
+  accentClassName: string
+}) {
   return (
-    <div className="rounded-lg border bg-card p-4 shadow-sm">
-      <div className="text-sm font-medium text-muted-foreground">{label}</div>
-      <div className="mt-3 text-3xl font-semibold tracking-tight">{value}</div>
+    <div className={cn('rounded-xl border p-4 shadow-sm', accentClassName)}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-medium text-muted-foreground">{label}</div>
+        <div className="rounded-full bg-background/80 p-2 shadow-sm">
+          <Icon className={cn('h-4 w-4', iconClassName)} />
+        </div>
+      </div>
+      <div className="mt-4 text-center text-3xl font-semibold tracking-tight">{value}</div>
     </div>
   )
 }

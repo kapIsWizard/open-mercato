@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isValidPolishTaxId, normalizePolishTaxId } from '@open-mercato/shared/lib/pl/nip'
 
 const uuid = () => z.string().uuid()
 
@@ -56,10 +57,23 @@ const personDetailsSchema = {
 
 const personFirstNameSchema = z.string().trim().min(1).max(120)
 const personLastNameSchema = z.string().trim().min(1).max(120)
+const companyTaxIdSchema = z
+  .string()
+  .trim()
+  .max(32)
+  .optional()
+  .transform((value) => {
+    const normalized = normalizePolishTaxId(value)
+    return normalized ?? undefined
+  })
+  .refine((value) => !value || isValidPolishTaxId(value), {
+    message: 'Enter a valid NIP.',
+  })
 
 const companyDetailsSchema = {
   legalName: z.string().trim().max(200).optional(),
   brandName: z.string().trim().max(200).optional(),
+  taxId: companyTaxIdSchema,
   domain: z.string().trim().max(200).optional(),
   websiteUrl: z.string().trim().url().max(300).optional(),
   industry: z.string().trim().max(150).optional(),

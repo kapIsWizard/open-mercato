@@ -11,7 +11,6 @@ const purchasingIcon = React.createElement(
 
 export const metadata = {
   requireAuth: true,
-  requireFeatures: ['purchasing.requests.view'],
   pageTitle: 'Purchasing',
   pageTitleKey: 'purchasing.nav.root',
   pageGroup: 'Operations',

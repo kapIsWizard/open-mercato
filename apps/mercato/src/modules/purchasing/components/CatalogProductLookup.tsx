@@ -1,23 +1,30 @@
 "use client"
 
 import * as React from 'react'
+import { CheckCircle2, CirclePlus } from 'lucide-react'
 import { Badge } from '@open-mercato/ui/primitives/badge'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
+import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { cn } from '@open-mercato/shared/lib/utils'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 
 export type CatalogProductLookupRow = {
   id: string
   sku: string | null
   title: string
+  unit: string | null
   referenceNumber: string | null
   supplier: string | null
   group: string | null
   purchasingAvailability: string | null
   availableQuantity: number | null
   unitPriceNet: string | null
+}
+
+export type CatalogProductLookupSelection = CatalogProductLookupRow & {
+  quantity: string
+  purchasingNote: string
 }
 
 type LookupResponse = {
@@ -32,13 +39,13 @@ type LookupResponse = {
 type CatalogProductLookupProps = {
   rowId: string
   query?: string
-  selectedProductIds?: string[]
-  selectedProductQuantities?: Record<string, string>
+  selectedRows?: CatalogProductLookupSelection[]
   onQueryChange?: (value: string) => void
   onPick: (product: CatalogProductLookupRow, quantity: number) => void
   onRemove?: (productId: string) => void
+  onQuantityChange?: (productId: string, quantity: string) => void
+  onNoteChange?: (productId: string, note: string) => void
   disabled?: boolean
-  fullWidth?: boolean
 }
 
 const PAGE_SIZE = 8
@@ -46,13 +53,13 @@ const PAGE_SIZE = 8
 export function CatalogProductLookup({
   rowId,
   query = '',
-  selectedProductIds = [],
-  selectedProductQuantities = {},
+  selectedRows = [],
   onQueryChange,
   onPick,
   onRemove,
+  onQuantityChange,
+  onNoteChange,
   disabled = false,
-  fullWidth = false,
 }: CatalogProductLookupProps) {
   const t = useT()
   const [searchValue, setSearchValue] = React.useState(query)
@@ -70,6 +77,27 @@ export function CatalogProductLookup({
     setSearchValue(query)
   }, [query])
 
+  const applyFilterOptions = React.useCallback((payload: LookupResponse | null | undefined) => {
+    setSuppliers(Array.isArray(payload?.filters?.suppliers) ? payload.filters.suppliers : [])
+    setGroups(Array.isArray(payload?.filters?.groups) ? payload.filters.groups : [])
+    setAvailabilities(Array.isArray(payload?.filters?.availabilities) ? payload.filters.availabilities : [])
+  }, [])
+
+  const loadFilterOptions = React.useCallback(async () => {
+    try {
+      const payload = await readApiResultOrThrow<LookupResponse>('/api/purchasing/products?page=1&pageSize=1')
+      applyFilterOptions(payload)
+    } catch {
+      setSuppliers([])
+      setGroups([])
+      setAvailabilities([])
+    }
+  }, [applyFilterOptions])
+
+  React.useEffect(() => {
+    void loadFilterOptions()
+  }, [loadFilterOptions])
+
   const loadProducts = React.useCallback(async (params?: { search?: string; supplier?: string; group?: string; availability?: string }) => {
     setIsLoading(true)
     try {
@@ -84,35 +112,44 @@ export function CatalogProductLookup({
 
       const payload = await readApiResultOrThrow<LookupResponse>(`/api/purchasing/products?${searchParams.toString()}`)
       setResults(Array.isArray(payload.items) ? payload.items : [])
-      setSuppliers(Array.isArray(payload.filters?.suppliers) ? payload.filters.suppliers : [])
-      setGroups(Array.isArray(payload.filters?.groups) ? payload.filters.groups : [])
-      setAvailabilities(Array.isArray(payload.filters?.availabilities) ? payload.filters.availabilities : [])
+      applyFilterOptions(payload)
     } catch {
       setResults([])
-      setSuppliers([])
-      setGroups([])
-      setAvailabilities([])
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [applyFilterOptions])
 
   React.useEffect(() => {
     const timeout = window.setTimeout(() => {
+      const hasFilters = Boolean(supplier || group || availability)
+      const hasSearch = searchValue.trim().length >= 2
+      if (!hasFilters && !hasSearch) {
+        setResults([])
+        setIsLoading(false)
+        return
+      }
       void loadProducts({
         search: searchValue,
         supplier,
         group,
         availability,
       })
-    }, searchValue.trim().length > 1 ? 250 : 0)
+    }, 250)
     return () => {
       window.clearTimeout(timeout)
     }
   }, [availability, group, loadProducts, searchValue, supplier])
 
+  const selectedById = React.useMemo(() => new Map(selectedRows.map((row) => [row.id, row])), [selectedRows])
+  const searchRows = React.useMemo(
+    () => results.filter((product) => !selectedById.has(product.id)),
+    [results, selectedById],
+  )
+  const hasActiveSearch = searchValue.trim().length >= 2 || Boolean(supplier || group || availability)
+
   return (
-    <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+    <div className="space-y-4 rounded-lg border bg-muted/20 p-3">
       <div className="space-y-3">
         <Input
           data-testid={`purchasing-catalog-lookup-query-${rowId}`}
@@ -177,138 +214,201 @@ export function CatalogProductLookup({
 
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          {t('purchasing.products.lookup.helper', 'Start with the suggested list, then narrow it down with filters or search.')}
+          {t('purchasing.products.lookup.helper', 'Search the product catalog, pick rows, and keep selected products below.')}
         </p>
         {isLoading ? (
           <p className="text-xs text-muted-foreground">{t('purchasing.products.lookup.loading', 'Searching catalog...')}</p>
         ) : null}
       </div>
 
-      <div
-        className={cn(
-          'grid gap-3',
-          fullWidth ? 'grid-cols-1' : 'lg:grid-cols-2',
-        )}
-        data-testid={`purchasing-catalog-lookup-results-${rowId}`}
-      >
-        {results.map((product) => {
-          const isSelected = selectedProductIds.includes(product.id)
-          const selectedQuantityValue = selectedProductQuantities[product.id]
-          const quantityValue = draftQuantities[product.id] ?? selectedQuantityValue ?? '1'
-          return (
-            <div
-              key={product.id}
-              className={cn(
-                'rounded-lg border bg-background p-3 transition hover:border-primary/40 hover:shadow-sm',
-                isSelected ? 'border-primary ring-1 ring-primary/30' : null,
-              )}
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1 space-y-1">
-                  <div className="truncate text-sm font-semibold">{product.title}</div>
-                  <div className="flex flex-wrap gap-1">
-                    {product.sku ? <Badge variant="outline">{product.sku}</Badge> : null}
-                    {product.referenceNumber ? <Badge variant="outline">{product.referenceNumber}</Badge> : null}
-                    {product.supplier ? <Badge variant="secondary">{product.supplier}</Badge> : null}
-                  </div>
-                </div>
-                <div className="shrink-0">
-                  {isSelected ? (
-                    <div className="flex flex-col items-end gap-1">
-                      <Badge>{t('purchasing.products.lookup.selected', 'Selected')}</Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {t('purchasing.products.lookup.orderedQuantity', 'Ordered: {count}', {
-                          count: selectedQuantityValue ?? '0',
-                        })}
-                      </span>
-                    </div>
-                  ) : (
-                    <Badge variant="outline">{t('purchasing.products.lookup.pick', 'Use product')}</Badge>
-                  )}
-                </div>
-              </div>
-              <div className="mt-3 grid gap-2 text-xs text-muted-foreground md:grid-cols-2">
-                <div>
-                  <span className="font-medium text-foreground">{t('purchasing.products.fields.group', 'Group')}:</span>{' '}
-                  {product.group ?? '-'}
-                </div>
-                <div>
-                  <span className="font-medium text-foreground">{t('purchasing.products.fields.availability', 'Availability')}:</span>{' '}
-                  {product.purchasingAvailability ?? '-'}
-                </div>
-                <div>
-                  <span className="font-medium text-foreground">{t('purchasing.products.fields.availableQuantity', 'Available')}:</span>{' '}
-                  {product.availableQuantity ?? '-'}
-                </div>
-                <div>
-                  <span className="font-medium text-foreground">{t('purchasing.products.fields.unitPriceNet', 'Net price')}:</span>{' '}
-                  {product.unitPriceNet ?? '-'}
-                </div>
-              </div>
-              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                <div className="w-full max-w-[140px] space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t('purchasing.items.fields.quantity', 'Quantity')}
-                  </label>
-                  <Input
-                    data-testid={`purchasing-catalog-lookup-quantity-${rowId}-${product.id}`}
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={quantityValue}
-                    onChange={(event) => {
-                      setDraftQuantities((current) => ({
-                        ...current,
-                        [product.id]: event.target.value,
-                      }))
-                    }}
-                    disabled={disabled}
-                  />
-                </div>
-                <Button
-                  type="button"
-                  data-testid={`purchasing-catalog-lookup-pick-${rowId}-${product.id}`}
-                  className="sm:min-w-[140px]"
-                  variant={isSelected ? 'outline' : 'default'}
-                  disabled={disabled}
-                  onClick={() => {
-                    const nextQuantity = Number(quantityValue || '1')
-                    const normalizedQuantity = Number.isFinite(nextQuantity) && nextQuantity > 0 ? nextQuantity : 1
-                    onPick(product, normalizedQuantity)
-                    setDraftQuantities((current) => ({
-                      ...current,
-                      [product.id]: String((Number(selectedQuantityValue || '0') || 0) + normalizedQuantity),
-                    }))
-                  }}
-                >
-                  {isSelected
-                    ? t('purchasing.products.lookup.addMore', 'Add more')
-                    : t('purchasing.products.lookup.addWithQuantity', 'Add product')}
-                </Button>
-                {isSelected && onRemove ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="sm:min-w-[110px]"
-                    disabled={disabled}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold">{t('purchasing.products.lookup.resultsTitle', 'Search results')}</h3>
+          {hasActiveSearch ? (
+            <span className="text-xs text-muted-foreground">
+              {t('purchasing.products.lookup.resultsCount', '{count} results', { count: searchRows.length })}
+            </span>
+          ) : null}
+        </div>
+        <div className="overflow-x-auto rounded-lg border bg-background" data-testid={`purchasing-catalog-lookup-results-${rowId}`}>
+          <table className="min-w-[1080px] w-full text-sm">
+            <thead className="bg-muted/30 text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.sku', 'SKU')}</th>
+                <th className="w-[240px] px-3 py-3 font-medium">{t('purchasing.products.fields.title', 'Product')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.referenceNumber', 'Reference')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.supplier', 'Supplier')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.group', 'Group')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.availability', 'Availability')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.availableQuantity', 'Available')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.unitPriceNet', 'Net price')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.unit', 'Unit')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.items.fields.quantity', 'Quantity')}</th>
+                <th className="px-3 py-3 text-right font-medium">{t('purchasing.products.lookup.selected', 'Selected')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {searchRows.map((product) => {
+                const quantityValue = draftQuantities[product.id] ?? '1'
+                const selectProduct = () => {
+                  const nextQuantity = Number(quantityValue || '1')
+                  const normalizedQuantity = Number.isFinite(nextQuantity) && nextQuantity > 0 ? nextQuantity : 1
+                  onPick(product, normalizedQuantity)
+                  setDraftQuantities((current) => ({
+                    ...current,
+                    [product.id]: String(normalizedQuantity),
+                  }))
+                }
+
+                return (
+                  <tr
+                    key={product.id}
+                    className="cursor-pointer border-t transition-colors hover:bg-muted/20"
                     onClick={() => {
-                      onRemove(product.id)
-                      setDraftQuantities((current) => ({
-                        ...current,
-                        [product.id]: '1',
-                      }))
+                      if (disabled) return
+                      selectProduct()
                     }}
                   >
-                    {t('purchasing.products.lookup.remove', 'Remove')}
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          )
-        })}
+                    <td className="px-3 py-3 align-middle">{product.sku ?? '—'}</td>
+                    <td className="px-3 py-3 align-middle">
+                      <div className="line-clamp-2 min-w-0 font-medium leading-5">{product.title}</div>
+                    </td>
+                    <td className="px-3 py-3 align-middle">{product.referenceNumber ?? '—'}</td>
+                    <td className="px-3 py-3 align-middle">{product.supplier ?? '—'}</td>
+                    <td className="px-3 py-3 align-middle">{product.group ?? '—'}</td>
+                    <td className="px-3 py-3 align-middle">
+                      {product.purchasingAvailability ? <Badge variant="outline">{product.purchasingAvailability}</Badge> : '—'}
+                    </td>
+                    <td className="px-3 py-3 align-middle">{product.availableQuantity ?? '—'}</td>
+                    <td className="px-3 py-3 align-middle">{product.unitPriceNet ?? '—'}</td>
+                    <td className="px-3 py-3 align-middle">{product.unit ?? '—'}</td>
+                    <td className="px-3 py-3 align-middle">
+                      <div onClick={(event) => event.stopPropagation()}>
+                        <Input
+                          data-testid={`purchasing-catalog-lookup-quantity-${rowId}-${product.id}`}
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={quantityValue}
+                          onChange={(event) => {
+                            setDraftQuantities((current) => ({
+                              ...current,
+                              [product.id]: event.target.value,
+                            }))
+                          }}
+                          disabled={disabled}
+                          className="w-[112px]"
+                        />
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 align-middle text-right">
+                      <button
+                        type="button"
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:text-foreground"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          if (disabled) return
+                          selectProduct()
+                        }}
+                        aria-label={t('purchasing.products.lookup.addWithQuantity', 'Add product')}
+                      >
+                        <CirclePlus className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {!isLoading && results.length === 0 ? (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold">{t('purchasing.items.selected.title', 'Selected products')}</h3>
+          <span className="text-xs text-muted-foreground">
+            {t('purchasing.items.selected.count', 'Selected: {count}', { count: selectedRows.length })}
+          </span>
+        </div>
+        <div className="overflow-x-auto rounded-lg border bg-background">
+          <table className="min-w-[1240px] w-full text-sm">
+            <thead className="bg-muted/30 text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.sku', 'SKU')}</th>
+                <th className="w-[220px] px-3 py-3 font-medium">{t('purchasing.products.fields.title', 'Product')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.referenceNumber', 'Reference')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.supplier', 'Supplier')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.group', 'Group')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.availability', 'Availability')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.availableQuantity', 'Available')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.unitPriceNet', 'Net price')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.products.fields.unit', 'Unit')}</th>
+                <th className="px-3 py-3 font-medium">{t('purchasing.items.fields.quantity', 'Quantity')}</th>
+                <th className="w-[240px] px-3 py-3 font-medium">{t('purchasing.items.fields.purchasingNote', 'Purchasing note')}</th>
+                <th className="px-3 py-3 text-right font-medium">{t('purchasing.products.lookup.selected', 'Selected')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {selectedRows.map((product) => (
+                <tr key={product.id} className="border-t bg-primary/5">
+                  <td className="px-3 py-3 align-middle">{product.sku ?? '—'}</td>
+                  <td className="px-3 py-3 align-middle">
+                    <div className="line-clamp-3 min-w-0 font-medium leading-5">{product.title}</div>
+                  </td>
+                  <td className="px-3 py-3 align-middle">{product.referenceNumber ?? '—'}</td>
+                  <td className="px-3 py-3 align-middle">{product.supplier ?? '—'}</td>
+                  <td className="px-3 py-3 align-middle">{product.group ?? '—'}</td>
+                  <td className="px-3 py-3 align-middle">
+                    {product.purchasingAvailability ? <Badge variant="outline">{product.purchasingAvailability}</Badge> : '—'}
+                  </td>
+                  <td className="px-3 py-3 align-middle">{product.availableQuantity ?? '—'}</td>
+                  <td className="px-3 py-3 align-middle">{product.unitPriceNet ?? '—'}</td>
+                  <td className="px-3 py-3 align-middle">{product.unit ?? '—'}</td>
+                  <td className="px-3 py-3 align-middle">
+                    <Input
+                      data-testid={`purchasing-selected-quantity-${rowId}-${product.id}`}
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={product.quantity}
+                      onChange={(event) => onQuantityChange?.(product.id, event.target.value)}
+                      disabled={disabled}
+                      className="w-[112px]"
+                    />
+                  </td>
+                  <td className="px-3 py-3 align-middle">
+                    <Textarea
+                      data-testid={`purchasing-selected-note-${rowId}-${product.id}`}
+                      rows={2}
+                      value={product.purchasingNote}
+                      onChange={(event) => onNoteChange?.(product.id, event.target.value)}
+                      disabled={disabled}
+                      placeholder={t('purchasing.items.fields.purchasingNote', 'Purchasing note')}
+                    />
+                  </td>
+                  <td className="px-3 py-3 align-middle text-right">
+                    <button
+                      type="button"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-600 transition-colors"
+                      onClick={() => onRemove?.(product.id)}
+                      aria-label={t('purchasing.products.lookup.remove', 'Remove')}
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {!isLoading && searchRows.length === 0 && selectedRows.length === 0 && !hasActiveSearch ? (
+        <p className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
+          {t('purchasing.products.lookup.idle', 'Search by SKU, reference number, or product name to start adding items.')}
+        </p>
+      ) : null}
+      {!isLoading && searchRows.length === 0 && hasActiveSearch ? (
         <p className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
           {t('purchasing.products.lookup.empty', 'No products match the current filters.')}
         </p>

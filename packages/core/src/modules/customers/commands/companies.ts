@@ -139,6 +139,7 @@ type CompanySnapshot = {
     id: string
     legalName: string | null
     brandName: string | null
+    taxId: string | null
     domain: string | null
     websiteUrl: string | null
     industry: string | null
@@ -233,6 +234,7 @@ async function loadCompanySnapshot(em: EntityManager, id: string): Promise<Compa
       id: profile.id,
       legalName: profile.legalName ?? null,
       brandName: profile.brandName ?? null,
+      taxId: profile.taxId ?? null,
       domain: profile.domain ?? null,
       websiteUrl: profile.websiteUrl ?? null,
       industry: profile.industry ?? null,
@@ -380,6 +382,7 @@ const createCompanyCommand: CommandHandler<CompanyCreateInput, { entityId: strin
       entity,
       legalName: parsed.legalName ?? null,
       brandName: parsed.brandName ?? null,
+      taxId: parsed.taxId ?? null,
       domain: parsed.domain ?? null,
       websiteUrl: parsed.websiteUrl ?? null,
       industry: parsed.industry ?? null,
@@ -489,6 +492,7 @@ const updateCompanyCommand: CommandHandler<CompanyUpdateInput, { entityId: strin
 
     if (parsed.legalName !== undefined) profile.legalName = parsed.legalName ?? null
     if (parsed.brandName !== undefined) profile.brandName = parsed.brandName ?? null
+    if (parsed.taxId !== undefined) profile.taxId = parsed.taxId ?? null
     if (parsed.domain !== undefined) profile.domain = parsed.domain ?? null
     if (parsed.websiteUrl !== undefined) profile.websiteUrl = parsed.websiteUrl ?? null
     if (parsed.industry !== undefined) profile.industry = parsed.industry ?? null
@@ -599,6 +603,7 @@ const updateCompanyCommand: CommandHandler<CompanyUpdateInput, { entityId: strin
         entity,
         legalName: before.profile.legalName,
         brandName: before.profile.brandName,
+        taxId: before.profile.taxId,
         domain: before.profile.domain,
         websiteUrl: before.profile.websiteUrl,
         industry: before.profile.industry,
@@ -609,6 +614,7 @@ const updateCompanyCommand: CommandHandler<CompanyUpdateInput, { entityId: strin
     } else {
       profile.legalName = before.profile.legalName
       profile.brandName = before.profile.brandName
+      profile.taxId = before.profile.taxId
       profile.domain = before.profile.domain
       profile.websiteUrl = before.profile.websiteUrl
       profile.industry = before.profile.industry
@@ -858,6 +864,7 @@ const deleteCompanyCommand: CommandHandler<{ body?: Record<string, unknown>; que
           entity,
           legalName: before.profile.legalName,
           brandName: before.profile.brandName,
+          taxId: before.profile.taxId,
           domain: before.profile.domain,
           websiteUrl: before.profile.websiteUrl,
           industry: before.profile.industry,
@@ -868,6 +875,7 @@ const deleteCompanyCommand: CommandHandler<{ body?: Record<string, unknown>; que
       } else {
         profile.legalName = before.profile.legalName
         profile.brandName = before.profile.brandName
+        profile.taxId = before.profile.taxId
         profile.domain = before.profile.domain
         profile.websiteUrl = before.profile.websiteUrl
         profile.industry = before.profile.industry

@@ -1,6 +1,5 @@
 export const metadata = {
   requireAuth: true,
-  requireFeatures: ['purchasing.requests.view'],
   pageTitle: 'Purchasing request',
   pageTitleKey: 'purchasing.requests.detail.title',
   pageGroup: 'Operations',
@@ -8,4 +7,3 @@ export const metadata = {
   navHidden: true,
   breadcrumb: [{ label: 'Purchasing requests', labelKey: 'purchasing.requests.page.title', href: '/backend/purchasing/requests' }],
 }
-

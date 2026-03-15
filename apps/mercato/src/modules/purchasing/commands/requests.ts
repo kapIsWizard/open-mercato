@@ -19,6 +19,7 @@ import {
   createRequestItemRecord,
   deleteScopedAttachments,
   requestIdentifiers,
+  resolveOrCreateCustomerCompany,
   requireRequestInScope,
   requireScope,
   recomputeRequestStatus,
@@ -49,15 +50,20 @@ const createRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRe
     const scope = requireScope(ctx)
     const parsed = purchasingRequestCreateSchema.parse(applyScopedInput(rawInput, scope))
     const dataEngine = ctx.container.resolve('dataEngine') as DataEngine
+    const customerCompany = await resolveOrCreateCustomerCompany(ctx, scope, {
+      customerCompanyId: parsed.customerCompanyId ?? null,
+      customerName: parsed.customerName ?? null,
+      customerNip: parsed.customerNip ?? null,
+    })
     const request = await dataEngine.createOrmEntity({
       entity: PurchasingRequest,
       data: {
         tenantId: parsed.tenantId,
         organizationId: parsed.organizationId,
         requestNumber: buildRequestNumber(),
-        customerNip: parsed.customerNip ?? null,
-        customerName: parsed.customerName ?? null,
-        customerCompanyId: parsed.customerCompanyId ?? null,
+        customerNip: customerCompany.customerNip,
+        customerName: customerCompany.customerName,
+        customerCompanyId: customerCompany.customerCompanyId,
         sourceChannel: parsed.sourceChannel,
         formVariant: parsed.formVariant,
         requestStatus: parsed.purchasingOwnerUserId ? 'assigned' : 'unassigned',
@@ -110,6 +116,11 @@ const updateRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRe
     const scope = requireScope(ctx)
     const parsed = purchasingRequestUpdateSchema.parse(applyScopedInput(rawInput, scope))
     const dataEngine = ctx.container.resolve('dataEngine') as DataEngine
+    const nextCustomerCompany = await resolveOrCreateCustomerCompany(ctx, scope, {
+      customerCompanyId: parsed.customerCompanyId ?? null,
+      customerName: parsed.customerName ?? null,
+      customerNip: parsed.customerNip ?? null,
+    })
     const request = await dataEngine.updateOrmEntity({
       entity: PurchasingRequest,
       where: {
@@ -119,9 +130,11 @@ const updateRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRe
         deletedAt: null,
       } as FilterQuery<PurchasingRequest>,
       apply: (entity) => {
-        if (parsed.customerNip !== undefined) entity.customerNip = parsed.customerNip ?? null
-        if (parsed.customerName !== undefined) entity.customerName = parsed.customerName ?? null
-        if (parsed.customerCompanyId !== undefined) entity.customerCompanyId = parsed.customerCompanyId ?? null
+        if (parsed.customerNip !== undefined || parsed.customerName !== undefined || parsed.customerCompanyId !== undefined) {
+          entity.customerNip = nextCustomerCompany.customerNip
+          entity.customerName = nextCustomerCompany.customerName
+          entity.customerCompanyId = nextCustomerCompany.customerCompanyId
+        }
         if (parsed.sourceChannel !== undefined) entity.sourceChannel = parsed.sourceChannel
         if (parsed.formVariant !== undefined) entity.formVariant = parsed.formVariant
         if (parsed.salesOwnerUserId !== undefined) entity.salesOwnerUserId = parsed.salesOwnerUserId ?? null

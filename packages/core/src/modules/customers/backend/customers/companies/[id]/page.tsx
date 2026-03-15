@@ -36,6 +36,7 @@ import { normalizeCustomFieldSubmitValue } from '../../../../components/detail/c
 import { InlineDictionaryEditor, renderMultilineMarkdownDisplay } from '../../../../components/detail/InlineEditors'
 import { formatTemplate } from '../../../../components/detail/utils'
 import { createTranslatorWithFallback } from '@open-mercato/shared/lib/i18n/translate'
+import { isValidPolishTaxId, normalizePolishTaxId } from '@open-mercato/shared/lib/pl/nip'
 import {
   CompanyPeopleSection,
   type CompanyPersonSummary,
@@ -73,6 +74,7 @@ type CompanyOverview = {
     id: string
     legalName?: string | null
     brandName?: string | null
+    taxId?: string | null
     domain?: string | null
     websiteUrl?: string | null
     industry?: string | null
@@ -235,6 +237,13 @@ export default function CustomerCompanyDetailPage({ params }: { params?: { id?: 
       }
       return null
     },
+    taxId: (value: string) => {
+      if (!value) return null
+      const normalized = normalizePolishTaxId(value)
+      return normalized && isValidPolishTaxId(normalized)
+        ? null
+        : t('customers.companies.detail.inline.taxIdInvalid', 'Enter a valid NIP.')
+    },
   }), [t])
 
   const { widgets: injectedTabWidgets } = useInjectionWidgets('customers.company.detail:tabs', {
@@ -370,7 +379,7 @@ export default function CustomerCompanyDetailPage({ params }: { params?: { id?: 
 
   const updateProfileField = React.useCallback(
     async (
-      field: 'brandName' | 'legalName' | 'websiteUrl' | 'industry' | 'domain' | 'sizeBucket',
+      field: 'brandName' | 'legalName' | 'taxId' | 'websiteUrl' | 'industry' | 'domain' | 'sizeBucket',
       next: string | null,
     ) => {
       const send = typeof next === 'string' ? next : ''
@@ -600,6 +609,16 @@ export default function CustomerCompanyDetailPage({ params }: { params?: { id?: 
       placeholder: t('customers.companies.detail.fields.brandNamePlaceholder', 'Add brand name'),
       emptyLabel: t('customers.companies.detail.noValue', 'Not provided'),
       onSave: (value) => updateProfileField('brandName', value),
+    },
+    {
+      key: 'taxId',
+      kind: 'text',
+      label: t('customers.companies.detail.fields.taxId', 'NIP'),
+      value: profile?.taxId ?? null,
+      placeholder: t('customers.companies.detail.fields.taxIdPlaceholder', '1234567890'),
+      emptyLabel: t('customers.companies.detail.noValue', 'Not provided'),
+      validator: validators.taxId,
+      onSave: (value) => updateProfileField('taxId', value ? normalizePolishTaxId(value) : value),
     },
     {
       key: 'description',

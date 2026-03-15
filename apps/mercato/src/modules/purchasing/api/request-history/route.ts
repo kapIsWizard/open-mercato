@@ -9,9 +9,11 @@ import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { PurchasingRequest } from '../../data/entities'
 import { buildPurchasingHistoryEntries } from '../../lib/requestHistory'
+import { guardPurchasingAccess } from '../../lib/apiAccess'
+import { canAccessPurchasingModule } from '../../lib/roleAccess'
 
 export const metadata = {
-  GET: { requireAuth: true, requireFeatures: ['purchasing.requests.view'] },
+  GET: { requireAuth: true },
 }
 
 const querySchema = z.object({
@@ -23,6 +25,8 @@ const querySchema = z.object({
 
 export async function GET(req: Request) {
   try {
+    const denied = await guardPurchasingAccess(req, canAccessPurchasingModule)
+    if (denied) return denied
     const url = new URL(req.url)
     const query = querySchema.parse(Object.fromEntries(url.searchParams))
     const container = await createRequestContainer()

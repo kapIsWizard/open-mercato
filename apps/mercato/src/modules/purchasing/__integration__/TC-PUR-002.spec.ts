@@ -1,257 +1,160 @@
 import { expect, test } from '@playwright/test'
-import { login } from '@open-mercato/core/modules/core/__integration__/helpers/auth'
 import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api'
+import { deleteCatalogProductIfExists } from '@open-mercato/core/modules/core/__integration__/helpers/catalogFixtures'
+import {
+  cleanupPurchasingRoleFixtures,
+  createValidNip,
+  getTenantUserToken,
+  loginTenantUser,
+  provisionPurchasingRoleFixtures,
+  type PurchasingRoleFixture,
+} from './helpers'
 
 type IdResponse = {
   id?: string | null
 }
 
-type ImportedProductFixture = {
-  id: string
-  title: string
-  sku: string | null
-  referenceNumber: string | null
-  supplier: string | null
-}
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
-async function getImportedProductFixtures(
+async function createPurchasingCatalogProduct(
   request: Parameters<typeof apiRequest>[0],
   token: string,
-  count = 2,
-): Promise<ImportedProductFixture[]> {
-  const response = await apiRequest(request, 'GET', `/api/purchasing/products?page=1&pageSize=${count + 5}`, {
+  uniqueSuffix: string,
+): Promise<{ id: string; sku: string; title: string; referenceNumber: string }> {
+  const sku = `UI-PUR-${uniqueSuffix}`
+  const referenceNumber = `UI-REF-${uniqueSuffix}`
+  const title = `UI Purchasing Product ${uniqueSuffix}`
+  const response = await apiRequest(request, 'POST', '/api/catalog/products', {
     token,
+    data: {
+      title,
+      sku,
+      handle: `ui-purchasing-product-${uniqueSuffix.toLowerCase()}`,
+      description: `UI purchasing product ${uniqueSuffix}`,
+      defaultUnit: 'pc',
+      defaultSalesUnit: 'pc',
+      primaryCurrencyCode: 'PLN',
+      taxRate: 8,
+      metadata: {
+        purchasingImport: {
+          source: 'akeneo',
+          symbol: sku,
+          referenceNumber,
+          supplier: `UI Supplier ${uniqueSuffix}`,
+          group: `UI Group ${uniqueSuffix}`,
+          purchasingAvailability: 'AVAILABLE',
+          availableQuantity: 20,
+          unitPriceNet: '15.50',
+        },
+      },
+    },
   })
   expect(response.ok(), await response.text()).toBeTruthy()
-  const body = await response.json() as { items?: Array<Record<string, unknown>> }
-  const items = Array.isArray(body.items) ? body.items : []
-  const fixtures = items
-    .map((item) => ({
-      id: typeof item.id === 'string' ? item.id : '',
-      title: typeof item.title === 'string' ? item.title : '',
-      sku: typeof item.sku === 'string' ? item.sku : null,
-      referenceNumber: typeof item.referenceNumber === 'string' ? item.referenceNumber : null,
-      supplier: typeof item.supplier === 'string' ? item.supplier : null,
-    }))
-    .filter((item) => item.id && item.title && item.supplier)
-    .slice(0, count)
-  expect(fixtures.length).toBeGreaterThanOrEqual(count)
-  return fixtures
+  const body = (await response.json()) as IdResponse
+  expect(typeof body.id).toBe('string')
+  return { id: body.id as string, sku, title, referenceNumber }
 }
 
 async function createRequestFixture(
   request: Parameters<typeof apiRequest>[0],
   token: string,
-  uniqueSuffix: string,
+  input: {
+    customerName: string
+    customerNip: string
+    product: { id: string; sku: string; title: string; referenceNumber: string }
+    quantity?: number
+  },
 ): Promise<string> {
   const response = await apiRequest(request, 'POST', '/api/purchasing/requests', {
     token,
     data: {
-      customerNip: `PL${uniqueSuffix}`,
-      customerName: `Purchasing UI ${uniqueSuffix}`,
-      sourceChannel: 'email',
-      formVariant: 'simple',
-      requestText: `UI purchasing flow test ${uniqueSuffix}`,
-      customerOrderNumber: `CO-${uniqueSuffix}`,
+      customerName: input.customerName,
+      customerNip: input.customerNip,
       items: [
-        { sku: `UI-SKU-${uniqueSuffix}`, referenceNumber: `REF-${uniqueSuffix}`, productName: 'UI Safety Gloves', quantity: 12 },
+        {
+          catalogProductId: input.product.id,
+          sku: input.product.sku,
+          referenceNumber: input.product.referenceNumber,
+          productName: input.product.title,
+          quantity: input.quantity ?? 1,
+        },
       ],
     },
   })
   expect(response.ok(), await response.text()).toBeTruthy()
-  const body = await response.json() as IdResponse
-  expect(body.id).toBeTruthy()
+  const body = (await response.json()) as IdResponse
+  expect(typeof body.id).toBe('string')
   return body.id as string
 }
 
-test.describe('TC-PUR-002: purchasing request UI happy path', () => {
+test.describe('TC-PUR-002: purchasing UI role-based workflows', () => {
+  test.describe.configure({ timeout: 90_000 })
   let adminToken = ''
-  let employeeToken = ''
+  let fixtures: PurchasingRoleFixture | null = null
+  let salesToken = ''
+  let purchasingToken = ''
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(90_000)
     adminToken = await getAuthToken(request, 'admin')
-    employeeToken = await getAuthToken(request, 'employee')
+    fixtures = await provisionPurchasingRoleFixtures(request, adminToken, `qa-pur-002-${Date.now()}`)
+    salesToken = await getTenantUserToken(request, fixtures.tenantId, fixtures.users.sales.email)
+    purchasingToken = await getTenantUserToken(request, fixtures.tenantId, fixtures.users.purchasing.email)
   })
 
-  test('should create request, update item status, add comment and open items view', async ({ page, request }) => {
+  test.afterAll(async ({ request }) => {
     test.setTimeout(90_000)
-    const uniqueSuffix = Date.now().toString()
+    await cleanupPurchasingRoleFixtures(request, adminToken, fixtures)
+  })
+
+  test('sales should land on purchasing list, use quick intake form, and get read-only detail with comments', async ({ page, request }) => {
+    const uniqueSuffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`
+    let productId: string | null = null
     let requestId: string | null = null
 
-    await login(page, 'admin')
-
     try {
-      const [product] = await getImportedProductFixtures(request, adminToken, 1)
+      const product = await createPurchasingCatalogProduct(request, adminToken, uniqueSuffix)
+      productId = product.id
+
+      await loginTenantUser(page, {
+        tenantId: fixtures!.tenantId,
+        email: fixtures!.users.sales.email,
+      })
+      await expect(page).toHaveURL(/\/backend\/purchasing\/requests(?:\?.*)?$/)
 
       await page.goto('/backend/purchasing/requests/create', { waitUntil: 'domcontentloaded' })
       await expect(page.getByTestId('purchasing-request-create-page')).toBeVisible()
+      await expect(page.getByText('Request details')).toHaveCount(0)
+      await expect(page.getByTestId('purchasing-create-attachments-section')).toBeVisible()
 
-      await page.getByTestId('purchasing-catalog-lookup-filter-supplier-create').selectOption(product.supplier as string)
-      await page.getByTestId(`purchasing-catalog-lookup-pick-create-${product.id}`).click()
-      await expect(page.getByTestId('purchasing-create-item-sku-0')).toHaveValue(product.sku ?? '')
-      await expect(page.getByTestId('purchasing-create-item-reference-0')).toHaveValue(product.referenceNumber ?? '')
-      await expect(page.getByTestId('purchasing-create-item-product-0')).toHaveValue(product.title)
-      await page.getByTestId('purchasing-create-item-quantity-0').fill('12')
-      const attachmentsSection = page.getByTestId('purchasing-create-attachments-section')
-      await attachmentsSection.scrollIntoViewIfNeeded()
-      await expect(attachmentsSection).toBeVisible()
-      const uploadResponsePromise = page.waitForResponse(
-        (response) => response.url().includes('/api/attachments') && response.request().method() === 'POST',
-      )
-      await attachmentsSection.locator('input[type="file"]').setInputFiles({
-        name: `request-${uniqueSuffix}.txt`,
-        mimeType: 'text/plain',
-        buffer: Buffer.from(`request attachment ${uniqueSuffix}`, 'utf-8'),
-      })
-      expect((await uploadResponsePromise).ok()).toBeTruthy()
-      await expect(attachmentsSection).toContainText(`request-${uniqueSuffix}.txt`)
-      await page.getByTestId('purchasing-create-customer-nip').fill(`PL${uniqueSuffix}`)
-      await page.getByTestId('purchasing-create-customer-name').fill(`Purchasing UI ${uniqueSuffix}`)
-      await page.getByTestId('purchasing-create-request-text').fill('UI purchasing flow test')
-      const ownerSelect = page.getByTestId('purchasing-create-owner')
-      await ownerSelect.waitFor()
-      if (await ownerSelect.locator('option').evaluateAll((options) => options.some((option) => option.textContent?.includes('Purchasing Anna')))) {
-        const annaValue = await ownerSelect.locator('option').evaluateAll((options) => {
-          const matched = options.find((option) => option.textContent?.includes('Purchasing Anna'))
-          return matched?.getAttribute('value') ?? ''
-        })
-        if (annaValue) await ownerSelect.selectOption(annaValue)
-      }
+      await page.getByPlaceholder('1234567890').fill(createValidNip(`55547${String(uniqueSuffix).slice(-5)}`))
+      await page.getByPlaceholder('Customer company name').fill(`Sales UI ${uniqueSuffix}`)
+      await page.getByTestId('purchasing-catalog-lookup-query-create').fill(product.sku)
+      await expect(page.getByTestId('purchasing-catalog-lookup-results-create')).toContainText(product.title)
+      await page.getByTestId(`purchasing-catalog-lookup-quantity-create-${product.id}`).fill('4')
+      await page.getByTestId('purchasing-catalog-lookup-results-create')
+        .locator('tr', { hasText: product.sku })
+        .getByRole('button', { name: /add product/i })
+        .click()
 
+      await expect(page.getByTestId(`purchasing-selected-quantity-create-${product.id}`)).toHaveValue('4')
       const createResponsePromise = page.waitForResponse(
         (response) => response.url().includes('/api/purchasing/requests') && response.request().method() === 'POST',
       )
       await page.getByTestId('purchasing-create-submit').click()
       const createResponse = await createResponsePromise
       expect(createResponse.ok(), await createResponse.text()).toBeTruthy()
-      await expect(page).toHaveURL(/\/backend\/purchasing\/requests\/(?!create(?:\?|$))[^/?]+(?:\?.*)?$/)
+      await expect(page).toHaveURL(/\/backend\/purchasing\/requests\/[^/?]+(?:\?.*)?$/)
       requestId = page.url().split('/').pop()?.split('?')[0] ?? null
-      expect(requestId).toMatch(UUID_PATTERN)
 
       await expect(page.getByTestId('purchasing-request-detail-page')).toBeVisible()
-      await expect(page.getByText(`Purchasing UI ${uniqueSuffix}`)).toBeVisible()
-      await expect(page.getByTestId('purchasing-detail-selected-items-title')).toContainText('Request items')
-      await expect(page.getByTestId('purchasing-detail-item-reference-0')).toHaveValue(product.referenceNumber ?? '')
-      await expect(page.getByTestId('purchasing-detail-request-attachments-section')).toContainText(`request-${uniqueSuffix}.txt`)
-      await expect(page.getByTestId('purchasing-detail-owner-select')).toContainText(/Purchasing Anna|Purchasing Marek|Purchasing Julia|Employee|Admin/)
+      await expect(page.getByTestId('purchasing-detail-save-workflow')).toHaveCount(0)
+      await expect(page.getByTestId('purchasing-detail-owner-readonly')).toBeVisible()
+      await expect(page.getByTestId('purchasing-detail-item-status-0')).toBeDisabled()
 
-      await page.getByTestId('purchasing-detail-request-status-select').selectOption('in_progress')
-      await expect(page.getByTestId('purchasing-detail-request-status-select')).toHaveValue('in_progress')
-      const updateRequestResponsePromise = page.waitForResponse(
-        (response) => response.url().includes('/api/purchasing/requests') && response.request().method() === 'PUT',
-      )
-      await page.getByTestId('purchasing-detail-save-request').click()
-      expect((await updateRequestResponsePromise).ok()).toBeTruthy()
-      await expect(page.getByTestId('purchasing-detail-request-status')).toContainText('In progress')
-
-      await page.getByTestId('purchasing-detail-item-status-0').selectOption('cancelled')
-      const updateItemResponsePromise = page.waitForResponse(
-        (response) => response.url().includes('/api/purchasing/request-items') && response.request().method() === 'PUT',
-      )
-      await page.getByTestId('purchasing-detail-item-save-0').click()
-      expect((await updateItemResponsePromise).ok()).toBeTruthy()
-      await expect(page.getByTestId('purchasing-detail-item-status-0')).toHaveValue('cancelled')
-
-      await page.getByTestId('purchasing-detail-comment-body').fill(`Comment ${uniqueSuffix}`)
+      await page.getByRole('tab', { name: 'Comments' }).click()
+      await expect(page.getByTestId('purchasing-detail-comments-section')).toBeVisible()
+      await page.getByTestId('purchasing-detail-comment-body').fill(`Sales comment ${uniqueSuffix}`)
       await page.getByTestId('purchasing-detail-add-comment').click()
-      await expect(page.getByText(`Comment ${uniqueSuffix}`)).toBeVisible()
-
-      await page.getByTestId('purchasing-detail-open-items-view').click()
-      await expect(page).toHaveURL(/\/backend\/purchasing\/request-items(?:\?.*)?$/)
-      await expect(page.getByTestId('purchasing-items-page')).toBeVisible()
-      await page.getByTestId('purchasing-items-status-filter').selectOption('cancelled')
-      await expect(page.getByText('UI Safety Gloves').first()).toBeVisible()
-    } finally {
-      if (requestId) {
-        await apiRequest(request, 'DELETE', '/api/purchasing/requests', {
-          token: adminToken,
-          data: { id: requestId },
-        })
-      }
-    }
-  })
-
-  test('should let user add and remove products from create form before submit', async ({ page, request }) => {
-    const uniqueSuffix = `${Date.now()}-multi`
-
-    await login(page, 'admin')
-
-    try {
-      const [firstProduct, secondProduct] = await getImportedProductFixtures(request, adminToken, 2)
-
-      await page.goto('/backend/purchasing/requests/create', { waitUntil: 'domcontentloaded' })
-      await expect(page.getByTestId('purchasing-request-create-page')).toBeVisible()
-
-      await page.getByTestId('purchasing-catalog-lookup-filter-supplier-create').selectOption(firstProduct.supplier as string)
-      await page.getByTestId(`purchasing-catalog-lookup-pick-create-${firstProduct.id}`).click()
-      await page.getByTestId('purchasing-catalog-lookup-filter-supplier-create').selectOption(secondProduct.supplier as string)
-      await page.getByTestId(`purchasing-catalog-lookup-pick-create-${secondProduct.id}`).click()
-
-      await expect(page.getByTestId('purchasing-create-selected-items').locator('[data-testid^="purchasing-create-selected-item-"]')).toHaveCount(2)
-
-      await page.getByTestId('purchasing-create-item-remove-0').click()
-      await expect(page.getByTestId('purchasing-create-selected-items').locator('[data-testid^="purchasing-create-selected-item-"]')).toHaveCount(1)
-
-      await page.getByTestId('purchasing-create-item-remove-0').click()
-      await expect(page.getByTestId('purchasing-create-selected-items').locator('[data-testid^="purchasing-create-selected-item-"]')).toHaveCount(0)
-
-      await page.getByTestId('purchasing-create-customer-name').fill(`Purchasing UI ${uniqueSuffix}`)
-      await page.getByTestId('purchasing-create-submit').click()
-      await expect(page.getByText('Add at least one request item.')).toBeVisible()
-    } finally {
-      void request
-    }
-  })
-
-  test('should let admin add and remove products from request detail', async ({ page, request }) => {
-    const uniqueSuffix = `${Date.now()}-detail`
-    let requestId: string | null = null
-
-    await login(page, 'admin')
-
-    try {
-      const [, secondProduct] = await getImportedProductFixtures(request, adminToken, 2)
-      requestId = await createRequestFixture(request, adminToken, uniqueSuffix)
-
-      await page.goto(`/backend/purchasing/requests/${encodeURIComponent(requestId)}`, { waitUntil: 'domcontentloaded' })
-      await expect(page.getByTestId('purchasing-request-detail-page')).toBeVisible()
-      await expect(page.getByTestId('purchasing-detail-selected-items-count')).toContainText('1 selected')
-      await expect(page.getByTestId('purchasing-catalog-lookup-query-detail')).toHaveCount(0)
-      await expect(page.getByTestId('purchasing-detail-item-status-0').locator('option')).toContainText([
-        'Sent to purchasing',
-        'Sent to supplier',
-        'Waiting for supplier',
-        'Alternative needed',
-        'Quoted',
-        'Ordered',
-        'In transit',
-        'Delivered',
-        'Cancelled',
-      ])
-
-      await page.getByTestId('purchasing-catalog-lookup-filter-supplier-detail').selectOption(secondProduct.supplier as string)
-      const createItemResponsePromise = page.waitForResponse(
-        (response) => response.url().includes('/api/purchasing/request-items') && response.request().method() === 'POST',
-      )
-      await page.getByTestId(`purchasing-catalog-lookup-pick-detail-${secondProduct.id}`).click()
-      expect((await createItemResponsePromise).ok()).toBeTruthy()
-      await expect(page.getByTestId('purchasing-detail-items-section').locator('[data-testid^="purchasing-detail-item-remove-"]')).toHaveCount(2)
-
-      const removeItemResponsePromise = page.waitForResponse(
-        (response) => response.url().includes('/api/purchasing/request-items?id=') && response.request().method() === 'DELETE',
-      )
-      await page.getByTestId('purchasing-detail-item-remove-1').click()
-      expect((await removeItemResponsePromise).ok()).toBeTruthy()
-      await expect(page.getByTestId('purchasing-detail-items-section').locator('[data-testid^="purchasing-detail-item-remove-"]')).toHaveCount(1)
-
-      const removeLastItemResponsePromise = page.waitForResponse(
-        (response) => response.url().includes('/api/purchasing/request-items?id=') && response.request().method() === 'DELETE',
-      )
-      await page.getByTestId('purchasing-detail-item-remove-0').click()
-      expect((await removeLastItemResponsePromise).ok()).toBeTruthy()
-      await expect(page.getByTestId('purchasing-detail-items-empty')).toContainText('No products selected yet')
+      await expect(page.getByText(`Sales comment ${uniqueSuffix}`)).toBeVisible()
     } finally {
       if (requestId) {
         await apiRequest(request, 'DELETE', '/api/purchasing/requests', {
@@ -259,55 +162,141 @@ test.describe('TC-PUR-002: purchasing request UI happy path', () => {
           data: { id: requestId },
         }).catch(() => undefined)
       }
+      await deleteCatalogProductIfExists(request, adminToken, productId)
     }
   })
 
-  test('should show required-field guidance on create form', async ({ page }) => {
-    await login(page, 'admin')
-
-    await page.goto('/backend/purchasing/requests/create', { waitUntil: 'domcontentloaded' })
-    await expect(page.getByTestId('purchasing-request-create-page')).toBeVisible()
-
-    await expect(page.getByText('Customer name *')).toBeVisible()
-    await expect(page.getByText('Provide customer name or NIP so purchasing can identify the request.')).toBeVisible()
-    await expect(page.getByText('Each request needs at least one item with a product name and quantity.')).toBeVisible()
-    await expect(page.getByText('No products selected yet. Use the product browser above to build the request.')).toBeVisible()
-  })
-
-  test('should let employee open request detail without operational items access', async ({ page, request }) => {
-    const uniqueSuffix = `${Date.now()}-employee`
+  test('bok should see expanded create form and persist detailed request fields', async ({ page, request }) => {
+    const uniqueSuffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`
+    let productId: string | null = null
     let requestId: string | null = null
 
     try {
-      requestId = await createRequestFixture(request, employeeToken, uniqueSuffix)
+      const product = await createPurchasingCatalogProduct(request, adminToken, uniqueSuffix)
+      productId = product.id
 
-      await login(page, 'employee')
-      await page.goto(`/backend/purchasing/requests/${encodeURIComponent(requestId)}`)
-      await expect(page.getByTestId('purchasing-request-detail-page')).toBeVisible()
-      await expect(page.getByTestId('purchasing-detail-customer-name-readonly')).toHaveText(`Purchasing UI ${uniqueSuffix}`)
-      await expect(page.getByTestId('purchasing-detail-items-section')).toBeVisible()
-      await expect(page.getByTestId('purchasing-detail-item-product-0')).toHaveValue('UI Safety Gloves')
-      await expect(page.getByTestId('purchasing-detail-open-items-view')).toHaveCount(0)
-      await expect(page.getByTestId('purchasing-detail-save-request')).toHaveCount(0)
+      await loginTenantUser(page, {
+        tenantId: fixtures!.tenantId,
+        email: fixtures!.users.bok.email,
+      })
+      await page.goto('/backend/purchasing/requests/create', { waitUntil: 'domcontentloaded' })
+      await expect(page.getByText('Request details')).toBeVisible()
+      await expect(page.getByTestId('purchasing-create-customer-order-number')).toBeVisible()
+      await expect(page.getByTestId('purchasing-create-request-text')).toBeVisible()
 
-      await page.getByTestId('purchasing-detail-comment-body').fill(`Employee comment ${uniqueSuffix}`)
-      await page.getByTestId('purchasing-detail-add-comment').click()
-      await expect(page.getByText(`Employee comment ${uniqueSuffix}`)).toBeVisible()
+      await page.getByPlaceholder('1234567890').fill(createValidNip(`66647${String(uniqueSuffix).slice(-5)}`))
+      await page.getByPlaceholder('Customer company name').fill(`BOK UI ${uniqueSuffix}`)
+      await page.getByTestId('purchasing-create-customer-order-number').fill(`BOK-ORDER-${uniqueSuffix}`)
+      await page.getByTestId('purchasing-create-request-text').fill(`Pasted from customer email ${uniqueSuffix}`)
+      await page.getByTestId('purchasing-catalog-lookup-query-create').fill(product.sku)
+      await expect(page.getByTestId('purchasing-catalog-lookup-results-create')).toContainText(product.title)
+      await page.getByTestId('purchasing-catalog-lookup-results-create')
+        .locator('tr', { hasText: product.sku })
+        .click()
+
+      const createResponsePromise = page.waitForResponse(
+        (response) => response.url().includes('/api/purchasing/requests') && response.request().method() === 'POST',
+      )
+      await page.getByTestId('purchasing-create-submit').click()
+      expect((await createResponsePromise).ok()).toBeTruthy()
+      await expect(page).toHaveURL(/\/backend\/purchasing\/requests\/[^/?]+(?:\?.*)?$/)
+      requestId = page.url().split('/').pop()?.split('?')[0] ?? null
+
+      await expect(page.locator(`input[value="BOK-ORDER-${uniqueSuffix}"]`).first()).toBeVisible()
+      await expect(page.getByTestId('purchasing-detail-save-workflow')).toHaveCount(0)
+      await expect(page.getByTestId('purchasing-detail-owner-readonly')).toBeVisible()
     } finally {
       if (requestId) {
         await apiRequest(request, 'DELETE', '/api/purchasing/requests', {
           token: adminToken,
           data: { id: requestId },
-        })
+        }).catch(() => undefined)
       }
+      await deleteCatalogProductIfExists(request, adminToken, productId)
     }
   })
 
-  test('should hide request attachments on create form when user cannot view attachments', async ({ page }) => {
-    await login(page, 'employee')
+  test('purchasing should manage detail workflow and bulk-edit submitted request items', async ({ page, request }) => {
+    const uniqueSuffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`
+    let firstProductId: string | null = null
+    let secondProductId: string | null = null
+    let requestId: string | null = null
 
-    await page.goto('/backend/purchasing/requests/create', { waitUntil: 'domcontentloaded' })
-    await expect(page.getByTestId('purchasing-request-create-page')).toBeVisible()
-    await expect(page.getByTestId('purchasing-create-attachments-section')).toHaveCount(0)
+    try {
+      const firstProduct = await createPurchasingCatalogProduct(request, adminToken, `${uniqueSuffix}-a`)
+      const secondProduct = await createPurchasingCatalogProduct(request, adminToken, `${uniqueSuffix}-b`)
+      firstProductId = firstProduct.id
+      secondProductId = secondProduct.id
+
+      const createResponse = await apiRequest(request, 'POST', '/api/purchasing/requests', {
+        token: salesToken,
+        data: {
+          customerName: `Purchasing UI ${uniqueSuffix}`,
+          customerNip: createValidNip(`77747${String(uniqueSuffix).slice(-5)}`),
+          items: [
+            {
+              catalogProductId: firstProduct.id,
+              sku: firstProduct.sku,
+              referenceNumber: firstProduct.referenceNumber,
+              productName: firstProduct.title,
+              quantity: 1,
+            },
+            {
+              catalogProductId: secondProduct.id,
+              sku: secondProduct.sku,
+              referenceNumber: secondProduct.referenceNumber,
+              productName: secondProduct.title,
+              quantity: 2,
+            },
+          ],
+        },
+      })
+      expect(createResponse.ok(), await createResponse.text()).toBeTruthy()
+      requestId = ((await createResponse.json()) as IdResponse).id ?? null
+      expect(requestId).toBeTruthy()
+
+      await loginTenantUser(page, {
+        tenantId: fixtures!.tenantId,
+        email: fixtures!.users.purchasing.email,
+        expectedRedirect: /\/backend\/purchasing\/requests(?:\?.*)?$/,
+      })
+      await page.goto(`/backend/purchasing/requests/${requestId}`, { waitUntil: 'domcontentloaded' })
+      await expect(page.getByTestId('purchasing-request-detail-page')).toBeVisible()
+      await expect(page.getByTestId('purchasing-detail-save-workflow')).toBeVisible()
+      await expect(page.getByTestId('purchasing-detail-owner-select')).toBeVisible()
+
+      await page.getByRole('button', { name: /select all visible items/i }).click()
+      await expect(page.getByTestId('purchasing-detail-selected-items-count')).toContainText('2 selected')
+
+      await page.getByTestId('purchasing-detail-bulk-quantity').fill('6')
+      await page.getByTestId('purchasing-detail-bulk-apply-quantity').click()
+      await expect(page.getByTestId('purchasing-detail-item-quantity-0')).toHaveValue('6')
+      await expect(page.getByTestId('purchasing-detail-item-quantity-1')).toHaveValue('6')
+
+      await page.getByTestId('purchasing-detail-bulk-note').fill(`Bulk note ${uniqueSuffix}`)
+      await page.getByTestId('purchasing-detail-bulk-apply-note').click()
+      await expect(page.getByTestId('purchasing-detail-item-note-0')).toHaveValue(`Bulk note ${uniqueSuffix}`)
+      await expect(page.getByTestId('purchasing-detail-item-note-1')).toHaveValue(`Bulk note ${uniqueSuffix}`)
+
+      await page.getByTestId('purchasing-detail-bulk-status').selectOption('in_stock')
+      await page.getByTestId('purchasing-detail-bulk-apply-status').click()
+      await expect(page.getByTestId('purchasing-detail-item-status-0')).toHaveValue('in_stock')
+      await expect(page.getByTestId('purchasing-detail-item-status-1')).toHaveValue('in_stock')
+      await expect(page.getByTestId('purchasing-detail-item-autosave-0')).toContainText(/Saving soon|Saving|Saved/)
+      await expect(page.getByTestId('purchasing-detail-item-autosave-1')).toContainText(/Saving soon|Saving|Saved/)
+      await expect.poll(async () => await page.getByTestId('purchasing-detail-request-status').textContent()).toContain('Completed')
+
+      await page.getByRole('tab', { name: /activity history/i }).click()
+      await expect(page.getByTestId('purchasing-detail-history-section')).toBeVisible()
+    } finally {
+      if (requestId) {
+        await apiRequest(request, 'DELETE', '/api/purchasing/requests', {
+          token: adminToken,
+          data: { id: requestId },
+        }).catch(() => undefined)
+      }
+      await deleteCatalogProductIfExists(request, adminToken, firstProductId)
+      await deleteCatalogProductIfExists(request, adminToken, secondProductId)
+    }
   })
 })

@@ -19,6 +19,13 @@ import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuarde
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { cn } from '@open-mercato/shared/lib/utils'
 import {
+  canAccessPurchasingModule,
+  canManagePurchasingComments,
+  canManagePurchasingItems,
+  canManagePurchasingRequest,
+  canViewPurchasingOperationalItems,
+} from '../../../../lib/roleAccess'
+import {
   isOpenItemStatus,
   resolveItemStatusClassName,
   resolveRequestStatusClassName,
@@ -104,6 +111,7 @@ type AssigneeOption = {
 type FeatureCheckResponse = {
   ok?: boolean
   granted?: string[]
+  roles?: string[]
 }
 
 type PurchasingPermissions = {
@@ -147,6 +155,11 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
   const itemSaveResetTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const itemSavedSnapshotRef = React.useRef<Record<string, string>>({})
   const [itemSaveStates, setItemSaveStates] = React.useState<Record<string, ItemSaveState>>({})
+  const [selectedItemIds, setSelectedItemIds] = React.useState<string[]>([])
+  const [bulkItemStatus, setBulkItemStatus] = React.useState('')
+  const [bulkQuantity, setBulkQuantity] = React.useState('')
+  const [bulkSupplierOrderNumber, setBulkSupplierOrderNumber] = React.useState('')
+  const [bulkPurchasingNote, setBulkPurchasingNote] = React.useState('')
   const [permissions, setPermissions] = React.useState<PurchasingPermissions>({
     canUpdateRequests: false,
     canViewItems: false,
@@ -172,10 +185,6 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             features: [
-              'purchasing.requests.update',
-              'purchasing.items.view',
-              'purchasing.items.update',
-              'purchasing.comments.manage',
               'attachments.view',
               'attachments.manage',
             ],
@@ -185,23 +194,13 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
         readApiResultOrThrow<{ items?: Array<Record<string, unknown>> }>(`/api/purchasing/comments?requestId=${encodeURIComponent(id)}&page=1&pageSize=100`),
       ])
       const granted = Array.isArray(featureCall.result?.granted) ? featureCall.result.granted : []
+      const roleNames = Array.isArray(featureCall.result?.roles) ? featureCall.result.roles : []
       const nextPermissions = {
-        canUpdateRequests:
-          featureCall.result?.ok === true
-          || granted.includes('purchasing.requests.update')
-          || granted.includes('purchasing.requests.assign')
-          || granted.includes('purchasing.admin'),
-        canViewItems: true,
-        canOpenOperationalItems:
-          featureCall.result?.ok === true
-          || granted.includes('purchasing.items.view')
-          || granted.includes('purchasing.items.update')
-          || granted.includes('purchasing.admin'),
-        canManageItems:
-          featureCall.result?.ok === true
-          || granted.includes('purchasing.items.update')
-          || granted.includes('purchasing.admin'),
-        canManageComments: featureCall.result?.ok === true || granted.includes('purchasing.comments.manage'),
+        canUpdateRequests: canManagePurchasingRequest(roleNames),
+        canViewItems: canAccessPurchasingModule(roleNames),
+        canOpenOperationalItems: canViewPurchasingOperationalItems(roleNames),
+        canManageItems: canManagePurchasingItems(roleNames),
+        canManageComments: canManagePurchasingComments(roleNames),
         canViewAttachments:
           featureCall.result?.ok === true
           || granted.includes('attachments.view')
@@ -274,6 +273,10 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
 
   React.useEffect(() => {
     itemsRef.current = items
+  }, [items])
+
+  React.useEffect(() => {
+    setSelectedItemIds((current) => current.filter((itemId) => items.some((item) => item.id === itemId)))
   }, [items])
 
   React.useEffect(() => {
@@ -493,6 +496,30 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
       flash(normalized.message, 'error')
     }
   }, [id, load, permissions.canManageItems, runMutation, t])
+
+  const allItemsSelected = items.length > 0 && selectedItemIds.length === items.length
+
+  const applyBulkItemPatch = React.useCallback((
+    patch: Partial<Pick<RequestItemRecord, 'itemStatus' | 'quantity' | 'supplierOrderNumber' | 'purchasingNote'>>,
+    fieldsToClear: Array<'itemStatus' | 'quantity' | 'supplierOrderNumber' | 'purchasingNote'>,
+  ) => {
+    if (!permissions.canManageItems || selectedItemIds.length === 0) return
+    const selectedIdSet = new Set(selectedItemIds)
+    setItems((current) => current.map((item) => (
+      selectedIdSet.has(item.id)
+        ? { ...item, ...patch }
+        : item
+    )))
+    setItemFieldErrors((current) => {
+      const next = { ...current }
+      for (const itemId of selectedItemIds) {
+        let fieldState = next[itemId] ?? {}
+        for (const field of fieldsToClear) fieldState = clearFieldError(fieldState, field)
+        next[itemId] = fieldState
+      }
+      return next
+    })
+  }, [permissions.canManageItems, selectedItemIds])
 
   const addComment = React.useCallback(async () => {
     if (!id) return
@@ -787,10 +814,145 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                   </div>
                 ) : null}
                 {items.length > 0 ? (
-                  <div className="overflow-x-auto rounded-lg border" data-testid="purchasing-detail-items-table">
+                  <div className="space-y-3">
+                    {permissions.canManageItems ? (
+                      <div className="rounded-lg border bg-muted/15 p-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setSelectedItemIds(allItemsSelected ? [] : items.map((item) => item.id))}
+                          >
+                            {allItemsSelected
+                              ? t('purchasing.items.bulk.clearSelection', 'Clear selection')
+                              : t('purchasing.items.bulk.selectAll', 'Select all visible items')}
+                          </Button>
+                          {selectedItemIds.length > 0 ? (
+                            <span className="text-xs text-muted-foreground">
+                              {t('purchasing.items.bulk.selectedCount', '{count} selected', { count: selectedItemIds.length })}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-3 grid gap-3 xl:grid-cols-4">
+                          <div className="space-y-2">
+                            <FieldLabel>{t('purchasing.items.bulk.status', 'Bulk status update')}</FieldLabel>
+                            <select
+                              data-testid="purchasing-detail-bulk-status"
+                              className={selectClassName()}
+                              value={bulkItemStatus}
+                              onChange={(event) => setBulkItemStatus(event.target.value)}
+                              disabled={selectedItemIds.length === 0}
+                            >
+                              <option value="">{t('purchasing.items.filters.allStatuses', 'All statuses')}</option>
+                              {itemStatusViewValues.map((status) => (
+                                <option key={status} value={status}>
+                                  {t(`purchasing.itemStatus.${status}`, status)}
+                                </option>
+                              ))}
+                            </select>
+                            <Button
+                              data-testid="purchasing-detail-bulk-apply-status"
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={selectedItemIds.length === 0 || bulkItemStatus.length === 0}
+                              onClick={() => {
+                                applyBulkItemPatch({ itemStatus: bulkItemStatus }, ['itemStatus'])
+                              }}
+                            >
+                              {t('purchasing.items.bulk.applyStatus', 'Apply status')}
+                            </Button>
+                          </div>
+                          <div className="space-y-2">
+                            <FieldLabel>{t('purchasing.items.bulk.quantity', 'Bulk quantity')}</FieldLabel>
+                            <Input
+                              data-testid="purchasing-detail-bulk-quantity"
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={bulkQuantity}
+                              onChange={(event) => setBulkQuantity(event.target.value)}
+                              disabled={selectedItemIds.length === 0}
+                              placeholder={t('purchasing.items.fields.quantity', 'Quantity')}
+                            />
+                            <Button
+                              data-testid="purchasing-detail-bulk-apply-quantity"
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={selectedItemIds.length === 0 || bulkQuantity.trim().length === 0}
+                              onClick={() => {
+                                const nextQuantity = Number(bulkQuantity)
+                                if (!Number.isFinite(nextQuantity) || nextQuantity <= 0) return
+                                applyBulkItemPatch({ quantity: nextQuantity }, ['quantity'])
+                              }}
+                            >
+                              {t('purchasing.items.bulk.applyQuantity', 'Apply quantity')}
+                            </Button>
+                          </div>
+                          <div className="space-y-2">
+                            <FieldLabel>{t('purchasing.items.bulk.supplierOrderNumber', 'Bulk supplier order')}</FieldLabel>
+                            <Input
+                              data-testid="purchasing-detail-bulk-supplier-order"
+                              value={bulkSupplierOrderNumber}
+                              onChange={(event) => setBulkSupplierOrderNumber(event.target.value)}
+                              disabled={selectedItemIds.length === 0}
+                              placeholder={t('purchasing.items.fields.supplierOrderNumber', 'Supplier order number')}
+                            />
+                            <Button
+                              data-testid="purchasing-detail-bulk-apply-supplier-order"
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={selectedItemIds.length === 0}
+                              onClick={() => {
+                                applyBulkItemPatch({ supplierOrderNumber: bulkSupplierOrderNumber || null }, ['supplierOrderNumber'])
+                              }}
+                            >
+                              {t('purchasing.items.bulk.applySupplierOrderNumber', 'Apply supplier order')}
+                            </Button>
+                          </div>
+                          <div className="space-y-2">
+                            <FieldLabel>{t('purchasing.items.bulk.note', 'Bulk note')}</FieldLabel>
+                            <Textarea
+                              data-testid="purchasing-detail-bulk-note"
+                              rows={2}
+                              value={bulkPurchasingNote}
+                              onChange={(event) => setBulkPurchasingNote(event.target.value)}
+                              disabled={selectedItemIds.length === 0}
+                              placeholder={t('purchasing.items.fields.purchasingNote', 'Purchasing note')}
+                            />
+                            <Button
+                              data-testid="purchasing-detail-bulk-apply-note"
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={selectedItemIds.length === 0}
+                              onClick={() => {
+                                applyBulkItemPatch({ purchasingNote: bulkPurchasingNote || null }, ['purchasingNote'])
+                              }}
+                            >
+                              {t('purchasing.items.bulk.applyNote', 'Apply note')}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="overflow-x-auto rounded-lg border" data-testid="purchasing-detail-items-table">
                     <Table className="min-w-[980px]">
                             <TableHeader className="bg-muted/40">
                               <TableRow>
+                                {permissions.canManageItems ? (
+                                  <TableHead className="w-[52px] text-center">
+                                    <input
+                                      type="checkbox"
+                                      checked={allItemsSelected}
+                                      onChange={() => setSelectedItemIds(allItemsSelected ? [] : items.map((item) => item.id))}
+                                      aria-label={t('purchasing.items.bulk.selectAll', 'Select all visible items')}
+                                    />
+                                  </TableHead>
+                                ) : null}
                                 <TableHead>{t('purchasing.items.table.product', 'Product')}</TableHead>
                                 <TableHead>{t('purchasing.items.table.quantity', 'Quantity')}</TableHead>
                                 <TableHead>{t('purchasing.items.table.status', 'Status')}</TableHead>
@@ -801,6 +963,22 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                             <TableBody>
                               {items.map((item, index) => (
                                 <TableRow key={item.id} className="align-top">
+                                  {permissions.canManageItems ? (
+                                    <TableCell className="text-center align-middle">
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedItemIds.includes(item.id)}
+                                        onChange={() => {
+                                          setSelectedItemIds((current) => (
+                                            current.includes(item.id)
+                                              ? current.filter((entryId) => entryId !== item.id)
+                                              : [...current, item.id]
+                                          ))
+                                        }}
+                                        aria-label={t('purchasing.items.bulk.selectRow', 'Select item')}
+                                      />
+                                    </TableCell>
+                                  ) : null}
                                   <TableCell>
                                     <div className="min-w-[280px] space-y-3">
                                       <div className="font-medium" data-testid={`purchasing-detail-item-product-${index}`}>{item.productName}</div>
@@ -941,6 +1119,7 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                               ))}
                             </TableBody>
                     </Table>
+                  </div>
                   </div>
                 ) : null}
               </div>

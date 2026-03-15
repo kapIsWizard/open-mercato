@@ -7,6 +7,8 @@ import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { OpenApiMethodDoc, OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { User } from '@open-mercato/core/modules/auth/data/entities'
 import { z as zod } from 'zod'
+import { guardPurchasingAccess } from '../../lib/apiAccess'
+import { canManagePurchasingRequest } from '../../lib/roleAccess'
 
 const querySchema = z.object({
   q: z.string().optional(),
@@ -26,10 +28,12 @@ const errorSchema = zod.object({
 })
 
 export const metadata = {
-  GET: { requireAuth: true, requireFeatures: ['purchasing.requests.view'] },
+  GET: { requireAuth: true },
 }
 
 export async function GET(request: Request) {
+  const denied = await guardPurchasingAccess(request, canManagePurchasingRequest)
+  if (denied) return denied
   const auth = await getAuthFromRequest(request)
   if (!auth?.tenantId) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {

@@ -8,6 +8,8 @@ import {
   listPurchasingCatalogProducts,
   type CatalogScope,
 } from '../../lib/catalogProducts'
+import { guardPurchasingAccess } from '../../lib/apiAccess'
+import { canAccessPurchasingModule } from '../../lib/roleAccess'
 
 const querySchema = z.object({
   page: z.coerce.number().min(1).default(1),
@@ -53,10 +55,12 @@ const errorSchema = z.object({
 })
 
 export const metadata = {
-  GET: { requireAuth: true, requireFeatures: ['purchasing.requests.view'] },
+  GET: { requireAuth: true },
 }
 
 export async function GET(request: Request) {
+  const denied = await guardPurchasingAccess(request, canAccessPurchasingModule)
+  if (denied) return denied
   const auth = await getAuthFromRequest(request)
   if (!auth?.tenantId || !auth.orgId) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {

@@ -97,6 +97,15 @@ function extractJwtRoles(token: unknown): string[] {
   }
 }
 
+function resolvePurchasingLandingFromRoles(roles: string[]): string | null {
+  const normalized = new Set(roles.map((role) => role.trim()).filter(Boolean))
+  if (normalized.has('superadmin') || normalized.has('admin')) return null
+  if (normalized.has('employee') || normalized.has('sales') || normalized.has('bok') || normalized.has('purchasing')) {
+    return '/backend/purchasing/requests'
+  }
+  return null
+}
+
 export default function LoginPage() {
   const t = useT()
   const translate = useCallback(
@@ -273,13 +282,14 @@ export default function LoginPage() {
       // In case API returns 200 with JSON
       const data = await res.json().catch(() => null)
       clearAllOperations()
+      const tokenRoles = extractJwtRoles(data?.token)
+      const roleAwareFallbackRedirect = resolvePurchasingLandingFromRoles(tokenRoles)
       if (fallbackRedirect) {
         hardRedirect(fallbackRedirect)
         return
       }
-      const tokenRoles = extractJwtRoles(data?.token)
-      if (requestedRedirect === '/backend' && tokenRoles.includes('employee')) {
-        hardRedirect('/backend/purchasing/requests')
+      if ((requestedRedirect === '/backend' || data?.redirect === '/backend') && roleAwareFallbackRedirect) {
+        hardRedirect(roleAwareFallbackRedirect)
         return
       }
       if (data && data.redirect) {

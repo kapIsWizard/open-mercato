@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isValidPolishTaxId, normalizePolishTaxId } from '@open-mercato/shared/lib/pl/nip'
 import {
   itemStatusStorageValues,
   itemStatusViewValues,
@@ -12,6 +13,16 @@ const productNameMaxMessage = 'Product name must be 500 characters or fewer.'
 const quantityMessage = 'Quantity must be a whole number greater than 0.'
 const commentBodyRequiredMessage = 'Comment body is required.'
 const commentBodyMaxMessage = 'Comment body must be 4000 characters or fewer.'
+const customerNipMessage = 'Enter a valid NIP.'
+
+const customerNipSchema = z
+  .string()
+  .trim()
+  .max(32, 'Customer NIP must be 32 characters or fewer.')
+  .optional()
+  .nullable()
+  .transform((value) => normalizePolishTaxId(value) ?? undefined)
+  .refine((value) => !value || isValidPolishTaxId(value), customerNipMessage)
 
 export const requestStatusSchema = z.enum([
   ...requestStatusStorageValues,
@@ -42,7 +53,7 @@ export const purchasingRequestItemUpsertSchema = z.object({
 export const purchasingRequestCreateSchema = z.object({
   tenantId: z.string().uuid(uuidMessage).optional().nullable(),
   organizationId: z.string().uuid(uuidMessage).optional().nullable(),
-  customerNip: z.string().trim().max(32, 'Customer NIP must be 32 characters or fewer.').optional().nullable(),
+  customerNip: customerNipSchema,
   customerName: z.string().trim().max(255, 'Customer name must be 255 characters or fewer.').optional().nullable(),
   customerCompanyId: z.string().uuid(uuidMessage).optional().nullable(),
   sourceChannel: sourceChannelSchema.default('other'),
@@ -71,7 +82,7 @@ export const purchasingRequestUpdateSchema = z.object({
   id: z.string().uuid(uuidMessage),
   tenantId: z.string().uuid(uuidMessage).optional().nullable(),
   organizationId: z.string().uuid(uuidMessage).optional().nullable(),
-  customerNip: z.string().trim().max(32, 'Customer NIP must be 32 characters or fewer.').optional().nullable(),
+  customerNip: customerNipSchema,
   customerName: z.string().trim().max(255, 'Customer name must be 255 characters or fewer.').optional().nullable(),
   customerCompanyId: z.string().uuid(uuidMessage).optional().nullable(),
   sourceChannel: sourceChannelSchema.optional(),

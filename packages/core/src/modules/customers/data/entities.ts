@@ -223,6 +223,9 @@ export class CustomerCompanyProfile {
   @Property({ name: 'brand_name', type: 'text', nullable: true })
   brandName?: string | null
 
+  @Property({ name: 'tax_id', type: 'text', nullable: true })
+  taxId?: string | null
+
   @Property({ name: 'domain', type: 'text', nullable: true })
   domain?: string | null
 
