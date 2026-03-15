@@ -657,6 +657,29 @@ export async function logCrudAccess(options: LogCrudAccessOptions) {
     // ignore url parsing issues
   }
 
+  if (accessType === 'read:list') {
+    const sampleIds = extractRecordIds(items, idField).slice(0, 20)
+    if (sampleIds.length > 0) context.sampleIds = sampleIds
+    const payload: Record<string, unknown> = {
+      tenantId,
+      organizationId,
+      actorUserId,
+      resourceKind,
+      resourceId: '__list__',
+      accessType,
+    }
+    if (fields.length > 0) payload.fields = fields
+    if (Object.keys(context).length > 0) payload.context = context
+    try {
+      await Promise.resolve(service.log(payload))
+    } catch (err) {
+      try {
+        console.error('[crud] failed to record access log', { err, payload })
+      } catch {}
+    }
+    return
+  }
+
   const uniqueIds = new Set<string>()
   const tasks: Promise<unknown>[] = []
   for (const item of items) {

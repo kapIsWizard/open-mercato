@@ -5,7 +5,8 @@ import { PostgreSqlDriver } from '@mikro-orm/postgresql'
 import { getSslConfig } from './ssl'
 
 let ormInstance: MikroORM<PostgreSqlDriver> | null = null
-const DEV_DB_POOL_MAX = 20
+const DEV_DB_POOL_MAX = 6
+const DEV_DB_POOL_MIN = 0
 
 // Registration pattern for publishable packages
 let _entities: any[] | null = null
@@ -33,10 +34,13 @@ function parsePositiveInt(rawValue: string | undefined, fallback: number): numbe
 export function resolveDbPoolConfig(env: NodeJS.ProcessEnv) {
   const requestedPoolMin = parsePositiveInt(env.DB_POOL_MIN, 2)
   const requestedPoolMax = parsePositiveInt(env.DB_POOL_MAX, 50)
-  const poolMax = env.NODE_ENV === 'production'
+  const isProduction = env.NODE_ENV === 'production'
+  const poolMax = isProduction
     ? requestedPoolMax
     : Math.min(requestedPoolMax, DEV_DB_POOL_MAX)
-  const poolMin = Math.min(requestedPoolMin, poolMax)
+  const poolMin = isProduction
+    ? Math.min(requestedPoolMin, poolMax)
+    : Math.min(parsePositiveInt(env.DB_POOL_MIN, DEV_DB_POOL_MIN), poolMax)
   const idleTimeoutMillis = parsePositiveInt(env.DB_POOL_IDLE_TIMEOUT, 3000)
   const acquireTimeoutMillis = parsePositiveInt(env.DB_POOL_ACQUIRE_TIMEOUT, 6000)
 

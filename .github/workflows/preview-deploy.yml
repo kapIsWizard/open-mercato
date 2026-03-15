@@ -127,6 +127,7 @@ jobs:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
           DOKPLOY_PROJECT_ID: ${{ vars.DOKPLOY_PROJECT_ID }}
+          DOKPLOY_ENVIRONMENT_ID: ${{ vars.DOKPLOY_ENVIRONMENT_ID }}
           EXISTING_COMPOSE_ID: ${{ steps.existing.outputs.compose_id }}
           DEPLOY_ENV: ${{ steps.meta.outputs.deploy_env }}
           PREVIEW_IMAGE: ${{ steps.meta.outputs.image_full }}
@@ -161,7 +162,8 @@ jobs:
               -d "$(jq -n \
                 --arg name "$DEPLOY_ENV" \
                 --arg projectId "$DOKPLOY_PROJECT_ID" \
-                '{name: $name, projectId: $projectId, composeType: "docker-compose"}')")
+                --arg environmentId "$DOKPLOY_ENVIRONMENT_ID" \
+                '{name: $name, projectId: $projectId, environmentId: $environmentId, composeType: "docker-compose"}')")
 
             COMPOSE_ID=$(echo "$RESP" | jq -r '.composeId')
             if [[ -z "$COMPOSE_ID" || "$COMPOSE_ID" == "null" ]]; then

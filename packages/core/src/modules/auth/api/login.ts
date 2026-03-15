@@ -25,6 +25,10 @@ export const metadata = {}
 
 // validation comes from userLoginSchema
 
+function shouldWarmQueryIndexOnLogin(): boolean {
+  return parseBooleanToken(process.env.AUTH_LOGIN_QUERY_INDEX_WARMUP) === true
+}
+
 function resolveDefaultLoginRedirect(roleNames: string[]): string {
   const normalized = new Set(roleNames.map((role) => role.trim()).filter(Boolean))
   if (normalized.has('superadmin') || normalized.has('admin')) return '/backend'
@@ -101,13 +105,15 @@ export async function POST(req: Request) {
   }
   const resolvedTenantId = tenantId ?? (user.tenantId ? String(user.tenantId) : null)
   const userRoleNames = await auth.getUserRoles(user, resolvedTenantId)
-  try {
-    const eventBus = (container.resolve('eventBus') as EventBus)
-    void eventBus.emitEvent('query_index.coverage.warmup', {
-      tenantId: resolvedTenantId,
-    }).catch(() => undefined)
-  } catch {
-    // optional warmup
+  if (shouldWarmQueryIndexOnLogin()) {
+    try {
+      const eventBus = (container.resolve('eventBus') as EventBus)
+      void eventBus.emitEvent('query_index.coverage.warmup', {
+        tenantId: resolvedTenantId,
+      }).catch(() => undefined)
+    } catch {
+      // optional warmup
+    }
   }
   const token = signJwt({
     sub: String(user.id),

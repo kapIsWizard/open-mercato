@@ -23,9 +23,12 @@ const CORE_RETENTION_DAYS = toPositiveNumber(process.env.AUDIT_LOGS_CORE_RETENTI
 const NON_CORE_RETENTION_HOURS = toPositiveNumber(process.env.AUDIT_LOGS_NON_CORE_RETENTION_HOURS, 8)
 const CORE_RETENTION_MS = CORE_RETENTION_DAYS * 24 * 60 * 60 * 1000
 const NON_CORE_RETENTION_MS = NON_CORE_RETENTION_HOURS * 60 * 60 * 1000
+const ROTATE_INTERVAL_MS = toPositiveNumber(process.env.AUDIT_LOGS_ROTATE_INTERVAL_MS, 5 * 60 * 1000)
 
 let validationWarningLogged = false
 let runtimeValidationAvailable: boolean | null = null
+let lastRotateAt = 0
+let rotateInFlight: Promise<void> | null = null
 
 const isZodRuntimeMissing = (err: unknown) => err instanceof TypeError && typeof err.message === 'string' && err.message.includes('_zod')
 
@@ -106,7 +109,7 @@ export class AccessLogService {
         null,
       ],
     )
-    await this.rotate(fork)
+    await this.rotateIfDue(fork)
     const id = Array.isArray(rows) && rows.length > 0 ? rows[0]?.id ?? null : null
     if (!id) return null
     const entry = fork.create(AccessLog, {
@@ -195,6 +198,21 @@ export class AccessLogService {
     return { items, total, page, pageSize, totalPages }
   }
 
+  private async rotateIfDue(fork: EntityManager) {
+    const now = Date.now()
+    if (now - lastRotateAt < ROTATE_INTERVAL_MS) return
+    if (rotateInFlight) {
+      await rotateInFlight
+      return
+    }
+    rotateInFlight = this.rotate(fork)
+      .catch(() => undefined)
+      .finally(() => {
+        rotateInFlight = null
+      })
+    await rotateInFlight
+  }
+
   private async rotate(fork: EntityManager) {
     const now = Date.now()
     const coreCutoff = new Date(now - CORE_RETENTION_MS)
@@ -210,6 +228,7 @@ export class AccessLogService {
         resourceKind: { $nin: Array.from(CORE_RESOURCE_KINDS) },
         createdAt: { $lt: nonCoreCutoff },
       })
+      lastRotateAt = now
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn('[audit_logs] failed to rotate access logs', err)
