@@ -106,6 +106,16 @@ export function resolveRequestStatusVariant(status?: string | null): 'default' |
   return 'outline'
 }
 
+export function resolveRequestStatusClassName(status?: string | null): string {
+  const normalized = normalizeRequestStatusForView(status)
+  if (normalized === 'completed') return 'border-emerald-200 bg-emerald-100 text-emerald-900'
+  if (normalized === 'cancelled') return 'border-rose-200 bg-rose-100 text-rose-900'
+  if (normalized === 'in_progress') return 'border-amber-200 bg-amber-100 text-amber-950'
+  if (normalized === 'partially_ordered') return 'border-sky-200 bg-sky-100 text-sky-950'
+  if (normalized === 'assigned') return 'border-violet-200 bg-violet-100 text-violet-950'
+  return 'border-slate-200 bg-slate-100 text-slate-900'
+}
+
 export function resolveItemStatusVariant(status?: string | null): 'default' | 'destructive' | 'secondary' | 'outline' {
   const normalized = normalizeItemStatusForView(status)
   if (normalized === 'in_stock') return 'default'
@@ -118,4 +128,14 @@ export function resolveItemStatusVariant(status?: string | null): 'default' | 'd
     return 'secondary'
   }
   return 'outline'
+}
+
+export function resolveItemStatusClassName(status?: string | null): string {
+  const normalized = normalizeItemStatusForView(status)
+  if (normalized === 'in_stock') return 'border-emerald-200 bg-emerald-100 text-emerald-900'
+  if (normalized === 'cancelled') return 'border-rose-200 bg-rose-100 text-rose-900'
+  if (normalized === 'ordered') return 'border-sky-200 bg-sky-100 text-sky-950'
+  if (normalized === 'in_transit') return 'border-indigo-200 bg-indigo-100 text-indigo-950'
+  if (normalized === 'purchase_price_changed') return 'border-orange-200 bg-orange-100 text-orange-950'
+  return 'border-amber-200 bg-amber-100 text-amber-950'
 }

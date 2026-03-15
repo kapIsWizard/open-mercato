@@ -53,7 +53,7 @@ export const purchasingRequestCreateSchema = z.object({
   requestText: z.string().trim().max(12000, 'Request text must be 12000 characters or fewer.').optional().nullable(),
   items: z.array(purchasingRequestItemUpsertSchema).min(1, 'Add at least one request item.'),
 }).superRefine((value, ctx) => {
-  if (!value.customerNip && !value.customerName) {
+  if (!value.customerCompanyId && !value.customerNip && !value.customerName) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Provide customer name or NIP.',
@@ -85,7 +85,8 @@ export const purchasingRequestUpdateSchema = z.object({
   if (value.customerNip !== undefined && value.customerName !== undefined) {
     const customerNip = value.customerNip?.trim() ?? ''
     const customerName = value.customerName?.trim() ?? ''
-    if (!customerNip && !customerName) {
+    const customerCompanyId = value.customerCompanyId?.trim() ?? ''
+    if (!customerCompanyId && !customerNip && !customerName) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'Provide customer name or NIP.',

@@ -33,8 +33,10 @@ type CatalogProductLookupProps = {
   rowId: string
   query?: string
   selectedProductIds?: string[]
+  selectedProductQuantities?: Record<string, string>
   onQueryChange?: (value: string) => void
-  onPick: (product: CatalogProductLookupRow) => void
+  onPick: (product: CatalogProductLookupRow, quantity: number) => void
+  onRemove?: (productId: string) => void
   disabled?: boolean
   fullWidth?: boolean
 }
@@ -45,8 +47,10 @@ export function CatalogProductLookup({
   rowId,
   query = '',
   selectedProductIds = [],
+  selectedProductQuantities = {},
   onQueryChange,
   onPick,
+  onRemove,
   disabled = false,
   fullWidth = false,
 }: CatalogProductLookupProps) {
@@ -59,6 +63,7 @@ export function CatalogProductLookup({
   const [supplier, setSupplier] = React.useState('')
   const [group, setGroup] = React.useState('')
   const [availability, setAvailability] = React.useState('')
+  const [draftQuantities, setDraftQuantities] = React.useState<Record<string, string>>({})
   const [isLoading, setIsLoading] = React.useState(false)
 
   React.useEffect(() => {
@@ -188,17 +193,15 @@ export function CatalogProductLookup({
       >
         {results.map((product) => {
           const isSelected = selectedProductIds.includes(product.id)
+          const selectedQuantityValue = selectedProductQuantities[product.id]
+          const quantityValue = draftQuantities[product.id] ?? selectedQuantityValue ?? '1'
           return (
-            <button
+            <div
               key={product.id}
-              type="button"
-              data-testid={`purchasing-catalog-lookup-pick-${rowId}-${product.id}`}
               className={cn(
-                'rounded-lg border bg-background p-3 text-left transition hover:border-primary/40 hover:shadow-sm',
+                'rounded-lg border bg-background p-3 transition hover:border-primary/40 hover:shadow-sm',
                 isSelected ? 'border-primary ring-1 ring-primary/30' : null,
               )}
-              onClick={() => onPick(product)}
-              disabled={disabled}
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1 space-y-1">
@@ -211,7 +214,14 @@ export function CatalogProductLookup({
                 </div>
                 <div className="shrink-0">
                   {isSelected ? (
-                    <Badge>{t('purchasing.products.lookup.selected', 'Selected')}</Badge>
+                    <div className="flex flex-col items-end gap-1">
+                      <Badge>{t('purchasing.products.lookup.selected', 'Selected')}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {t('purchasing.products.lookup.orderedQuantity', 'Ordered: {count}', {
+                          count: selectedQuantityValue ?? '0',
+                        })}
+                      </span>
+                    </div>
                   ) : (
                     <Badge variant="outline">{t('purchasing.products.lookup.pick', 'Use product')}</Badge>
                   )}
@@ -235,7 +245,65 @@ export function CatalogProductLookup({
                   {product.unitPriceNet ?? '-'}
                 </div>
               </div>
-            </button>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div className="w-full max-w-[140px] space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    {t('purchasing.items.fields.quantity', 'Quantity')}
+                  </label>
+                  <Input
+                    data-testid={`purchasing-catalog-lookup-quantity-${rowId}-${product.id}`}
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={quantityValue}
+                    onChange={(event) => {
+                      setDraftQuantities((current) => ({
+                        ...current,
+                        [product.id]: event.target.value,
+                      }))
+                    }}
+                    disabled={disabled}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  data-testid={`purchasing-catalog-lookup-pick-${rowId}-${product.id}`}
+                  className="sm:min-w-[140px]"
+                  variant={isSelected ? 'outline' : 'default'}
+                  disabled={disabled}
+                  onClick={() => {
+                    const nextQuantity = Number(quantityValue || '1')
+                    const normalizedQuantity = Number.isFinite(nextQuantity) && nextQuantity > 0 ? nextQuantity : 1
+                    onPick(product, normalizedQuantity)
+                    setDraftQuantities((current) => ({
+                      ...current,
+                      [product.id]: String((Number(selectedQuantityValue || '0') || 0) + normalizedQuantity),
+                    }))
+                  }}
+                >
+                  {isSelected
+                    ? t('purchasing.products.lookup.addMore', 'Add more')
+                    : t('purchasing.products.lookup.addWithQuantity', 'Add product')}
+                </Button>
+                {isSelected && onRemove ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="sm:min-w-[110px]"
+                    disabled={disabled}
+                    onClick={() => {
+                      onRemove(product.id)
+                      setDraftQuantities((current) => ({
+                        ...current,
+                        [product.id]: '1',
+                      }))
+                    }}
+                  >
+                    {t('purchasing.products.lookup.remove', 'Remove')}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
           )
         })}
       </div>

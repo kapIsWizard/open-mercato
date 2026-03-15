@@ -5,7 +5,7 @@ export const metadata = {
   pageTitleKey: 'purchasing.items.page.title',
   pageGroup: 'Operations',
   pageGroupKey: 'purchasing.nav.group',
-  pageOrder: 122,
+  pagePriority: 12,
+  pageOrder: 14,
   breadcrumb: [{ label: 'Purchasing items', labelKey: 'purchasing.items.page.title' }],
 }
-

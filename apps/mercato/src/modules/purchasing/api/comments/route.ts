@@ -1,6 +1,8 @@
 import { z } from 'zod'
+import type { EntityManager } from '@mikro-orm/postgresql'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import { E } from '@/.mercato/generated/entities.ids.generated'
+import { User } from '@open-mercato/core/modules/auth/data/entities'
 import { PurchasingComment } from '../../data/entities'
 import {
   purchasingCommentCreateSchema,
@@ -89,6 +91,53 @@ const crud = makeCrudRoute({
       response: () => ({ ok: true }),
     },
   },
+  hooks: {
+    afterList: async (payload, ctx) => {
+      const items = Array.isArray(payload.items) ? payload.items : []
+      if (!items.length) return
+      const authorIds = Array.from(
+        new Set(
+          items
+            .map((item: unknown) => {
+              if (!item || typeof item !== 'object') return null
+              const record = item as Record<string, unknown>
+              if (typeof record.author_user_id === 'string' && record.author_user_id.trim().length > 0) return record.author_user_id
+              if (typeof record.authorUserId === 'string' && record.authorUserId.trim().length > 0) return record.authorUserId
+              return null
+            })
+            .filter((value: string | null): value is string => Boolean(value)),
+        ),
+      )
+      if (!authorIds.length) return
+      const em = ctx.container.resolve('em') as EntityManager
+      const users = await em.find(User, { id: { $in: authorIds as string[] } })
+      const userMap = new Map(
+        users.map((user) => [
+          user.id,
+          {
+            name: user.name ?? null,
+            email: user.email ?? null,
+          },
+        ]),
+      )
+      items.forEach((item: unknown) => {
+        if (!item || typeof item !== 'object') return
+        const record = item as Record<string, unknown>
+        const authorId =
+          typeof record.author_user_id === 'string'
+            ? record.author_user_id
+            : typeof record.authorUserId === 'string'
+              ? record.authorUserId
+              : null
+        if (!authorId) return
+        const author = userMap.get(authorId)
+        record.author_name = author?.name ?? null
+        record.author_email = author?.email ?? null
+        record.authorName = author?.name ?? null
+        record.authorEmail = author?.email ?? null
+      })
+    },
+  },
 })
 
 export const { GET, POST, PUT, DELETE } = crud
@@ -99,6 +148,8 @@ const commentListItemSchema = z.object({
   request_item_id: z.string().uuid().nullable().optional(),
   body: z.string(),
   author_user_id: z.string().nullable().optional(),
+  author_name: z.string().nullable().optional(),
+  author_email: z.string().nullable().optional(),
   created_at: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),
 }).passthrough()

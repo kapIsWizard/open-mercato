@@ -317,7 +317,7 @@ export async function listPurchasingCatalogProducts({
   supplier,
   group,
   availability,
-  importedOnly = true,
+  importedOnly = false,
   limit = 500,
 }: ProductLookupInput): Promise<PurchasingCatalogProductRow[]> {
   const products = await findWithDecryption(

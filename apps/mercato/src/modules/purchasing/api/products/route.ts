@@ -16,7 +16,6 @@ const querySchema = z.object({
   supplier: z.string().optional(),
   group: z.string().optional(),
   availability: z.string().optional(),
-  importedOnly: z.coerce.boolean().optional().default(true),
 }).passthrough()
 
 const productItemSchema = z.object({
@@ -74,7 +73,6 @@ export async function GET(request: Request) {
     supplier: url.searchParams.get('supplier') ?? undefined,
     group: url.searchParams.get('group') ?? undefined,
     availability: url.searchParams.get('availability') ?? undefined,
-    importedOnly: url.searchParams.get('importedOnly') ?? undefined,
   })
   if (!parsed.success) {
     return new Response(JSON.stringify({ error: 'Invalid query' }), {
@@ -92,7 +90,6 @@ export async function GET(request: Request) {
   const allRows = await listPurchasingCatalogProducts({
     em,
     scope,
-    importedOnly: parsed.data.importedOnly,
     limit: 5000,
   })
   const filteredRows = allRows.filter((row) => {
@@ -132,7 +129,7 @@ export async function GET(request: Request) {
 
 const productsGetDoc: OpenApiMethodDoc = {
   summary: 'List purchasing catalog products',
-  description: 'Returns catalog products imported for purchasing with search and supplier/group/availability filters.',
+  description: 'Returns native Open Mercato catalog products for purchasing with optional metadata-based filters.',
   tags: ['Purchasing'],
   query: querySchema,
   responses: [

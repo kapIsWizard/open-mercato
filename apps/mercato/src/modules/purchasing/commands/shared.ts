@@ -5,7 +5,12 @@ import { Attachment } from '@open-mercato/core/modules/attachments/data/entities
 import { clearAttachmentThumbnailCache } from '@open-mercato/core/modules/attachments/lib/thumbnailCache'
 import { deletePartitionFile } from '@open-mercato/core/modules/attachments/lib/storage'
 import { PurchasingRequest, PurchasingRequestItem } from '../data/entities'
-import { deriveRequestStatusFromItems, normalizeItemStatusForStorage } from '../lib/statuses'
+import {
+  deriveRequestStatusFromItems,
+  normalizeItemStatusForStorage,
+  normalizeItemStatusForView,
+  normalizeRequestStatusForView,
+} from '../lib/statuses'
 
 export type Scope = {
   tenantId: string | null
@@ -90,6 +95,41 @@ export function requestIdentifiers(request: PurchasingRequest) {
     id: request.id,
     tenantId: request.tenantId ?? null,
     organizationId: request.organizationId ?? null,
+  }
+}
+
+export function serializePurchasingRequestSnapshot(request: PurchasingRequest) {
+  return {
+    id: request.id,
+    tenantId: request.tenantId ?? null,
+    organizationId: request.organizationId ?? null,
+    requestNumber: request.requestNumber,
+    customerNip: request.customerNip ?? null,
+    customerName: request.customerName ?? null,
+    customerCompanyId: request.customerCompanyId ?? null,
+    requestStatus: normalizeRequestStatusForView(request.requestStatus),
+    salesOwnerUserId: request.salesOwnerUserId ?? null,
+    purchasingOwnerUserId: request.purchasingOwnerUserId ?? null,
+    customerOrderNumber: request.customerOrderNumber ?? null,
+    requestText: request.requestText ?? null,
+  }
+}
+
+export function serializePurchasingRequestItemSnapshot(item: PurchasingRequestItem) {
+  return {
+    id: item.id,
+    tenantId: item.tenantId ?? null,
+    organizationId: item.organizationId ?? null,
+    requestId: item.requestId,
+    catalogProductId: item.catalogProductId ?? null,
+    sku: item.sku ?? null,
+    referenceNumber: item.referenceNumber ?? null,
+    productName: item.productName,
+    quantity: item.quantity,
+    itemStatus: normalizeItemStatusForView(item.itemStatus),
+    deliveryDueAt: item.deliveryDueAt?.toISOString() ?? null,
+    supplierOrderNumber: item.supplierOrderNumber ?? null,
+    purchasingNote: item.purchasingNote ?? null,
   }
 }
 

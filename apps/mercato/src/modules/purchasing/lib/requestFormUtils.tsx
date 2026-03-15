@@ -18,6 +18,7 @@ export type PurchasingRecordItemValidation = {
 }
 
 export type PurchasingCreateFormValidation = {
+  customerCompanyId: string
   customerName: string
   customerNip: string
   items: PurchasingDraftItemValidation[]
@@ -41,6 +42,7 @@ export function resolvePurchasingFormError(
 
 export function validateCreateRequestForm(
   input: {
+    customerCompanyId: string
     customerName: string
     customerNip: string
     items: Array<{ productName: string; quantity: string }>
@@ -49,7 +51,7 @@ export function validateCreateRequestForm(
 ): { message?: string; fieldErrors: PurchasingFormErrors } {
   const fieldErrors: PurchasingFormErrors = {}
 
-  if (!input.customerName.trim() && !input.customerNip.trim()) {
+  if (!input.customerCompanyId.trim() && !input.customerName.trim() && !input.customerNip.trim()) {
     const message = t('purchasing.validation.customerRequired', 'Provide customer name or NIP.')
     fieldErrors.customerName = message
     fieldErrors.customerNip = message

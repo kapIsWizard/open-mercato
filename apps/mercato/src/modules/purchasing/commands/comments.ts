@@ -21,6 +21,18 @@ import {
   requireScope,
 } from './shared'
 
+function serializePurchasingCommentSnapshot(comment: PurchasingComment) {
+  return {
+    id: comment.id,
+    tenantId: comment.tenantId ?? null,
+    organizationId: comment.organizationId ?? null,
+    requestId: comment.requestId,
+    requestItemId: comment.requestItemId ?? null,
+    body: comment.body,
+    authorUserId: comment.authorUserId ?? null,
+  }
+}
+
 const commentCrudEvents: CrudEventsConfig<PurchasingComment> = {
   module: 'purchasing',
   entity: 'comment',
@@ -75,20 +87,39 @@ const createCommentCommand: CommandHandler<Record<string, unknown>, PurchasingCo
     })
     return comment
   },
+  captureAfter: async (_input, result) => serializePurchasingCommentSnapshot(result),
   buildLog: async ({ result }) => {
     const { translate } = await resolveTranslations()
     return {
       actionLabel: translate('purchasing.audit.comments.create', 'Create purchasing comment'),
       resourceKind: 'purchasing.comment',
       resourceId: result.id,
+      parentResourceKind: 'purchasing.request',
+      parentResourceId: result.requestId,
       tenantId: result.tenantId ?? null,
       organizationId: result.organizationId ?? null,
+      snapshotAfter: serializePurchasingCommentSnapshot(result),
     }
   },
 }
 
 const updateCommentCommand: CommandHandler<Record<string, unknown>, PurchasingComment> = {
   id: 'purchasing.comments.update',
+  async prepare(rawInput, ctx) {
+    const scope = requireScope(ctx)
+    const parsed = purchasingCommentUpdateSchema.parse(rawInput)
+    const em = (ctx.container.resolve('em') as EntityManager)
+    const comment = await em.findOne(PurchasingComment, {
+      id: parsed.id,
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      deletedAt: null,
+    } as FilterQuery<PurchasingComment>)
+    if (!comment) throw new CrudHttpError(404, { error: 'Purchasing comment not found' })
+    return {
+      before: serializePurchasingCommentSnapshot(comment),
+    }
+  },
   async execute(rawInput, ctx) {
     const scope = requireScope(ctx)
     const parsed = purchasingCommentUpdateSchema.parse(rawInput)
@@ -122,20 +153,40 @@ const updateCommentCommand: CommandHandler<Record<string, unknown>, PurchasingCo
     })
     return comment
   },
-  buildLog: async ({ result }) => {
+  captureAfter: async (_input, result) => serializePurchasingCommentSnapshot(result),
+  buildLog: async ({ result, snapshots }) => {
     const { translate } = await resolveTranslations()
     return {
       actionLabel: translate('purchasing.audit.comments.update', 'Update purchasing comment'),
       resourceKind: 'purchasing.comment',
       resourceId: result.id,
+      parentResourceKind: 'purchasing.request',
+      parentResourceId: result.requestId,
       tenantId: result.tenantId ?? null,
       organizationId: result.organizationId ?? null,
+      snapshotBefore: snapshots.before ?? null,
+      snapshotAfter: snapshots.after ?? serializePurchasingCommentSnapshot(result),
     }
   },
 }
 
 const deleteCommentCommand: CommandHandler<Record<string, unknown>, PurchasingComment> = {
   id: 'purchasing.comments.delete',
+  async prepare(rawInput, ctx) {
+    const scope = requireScope(ctx)
+    const parsed = purchasingCommentDeleteSchema.parse(rawInput)
+    const em = (ctx.container.resolve('em') as EntityManager)
+    const comment = await em.findOne(PurchasingComment, {
+      id: parsed.id,
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      deletedAt: null,
+    } as FilterQuery<PurchasingComment>)
+    if (!comment) throw new CrudHttpError(404, { error: 'Purchasing comment not found' })
+    return {
+      before: serializePurchasingCommentSnapshot(comment),
+    }
+  },
   async execute(rawInput, ctx) {
     const scope = requireScope(ctx)
     const parsed = purchasingCommentDeleteSchema.parse(rawInput)
@@ -166,14 +217,17 @@ const deleteCommentCommand: CommandHandler<Record<string, unknown>, PurchasingCo
     })
     return comment
   },
-  buildLog: async ({ result }) => {
+  buildLog: async ({ result, snapshots }) => {
     const { translate } = await resolveTranslations()
     return {
       actionLabel: translate('purchasing.audit.comments.delete', 'Delete purchasing comment'),
       resourceKind: 'purchasing.comment',
       resourceId: result.id,
+      parentResourceKind: 'purchasing.request',
+      parentResourceId: result.requestId,
       tenantId: result.tenantId ?? null,
       organizationId: result.organizationId ?? null,
+      snapshotBefore: snapshots.before ?? null,
     }
   },
 }

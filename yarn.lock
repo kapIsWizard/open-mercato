@@ -5487,6 +5487,7 @@ __metadata:
     pg: "npm:8.20.0"
     testcontainers: "npm:^11.12.0"
     ts-jest: "npm:^29.4.6"
+    tsx: "npm:^4.21.0"
     typescript: "npm:^5.9.3"
   bin:
     mercato: ./bin/mercato

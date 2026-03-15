@@ -3,6 +3,8 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { E } from '@/.mercato/generated/entities.ids.generated'
+import { DetailTabsLayout } from '@open-mercato/core/modules/customers/components/detail/DetailTabsLayout'
+import { formatDateTime, formatRelativeTime } from '@open-mercato/shared/lib/time'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { AttachmentsSection, LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
@@ -18,6 +20,8 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { cn } from '@open-mercato/shared/lib/utils'
 import {
   isOpenItemStatus,
+  resolveItemStatusClassName,
+  resolveRequestStatusClassName,
   itemStatusViewValues,
   normalizeItemStatusForView,
   normalizeRequestStatusForView,
@@ -36,7 +40,7 @@ import {
   validateCommentForm,
   validateRequestDetailForm,
   validateRequestItemForm,
-} from '../form-utils'
+} from '../../../../lib/requestFormUtils'
 
 type RequestRecord = {
   id: string
@@ -68,7 +72,28 @@ type RequestItemRecord = {
 type CommentRecord = {
   id: string
   body: string
+  authorUserId: string | null
+  authorName: string | null
+  authorEmail: string | null
   createdAt: string | null
+}
+
+type HistoryRecord = {
+  id: string
+  occurredAt: string
+  kind: 'status' | 'action' | 'comment'
+  action: string
+  actor: {
+    id: string | null
+    label: string
+  }
+  metadata?: {
+    targetType?: 'request' | 'item' | 'comment'
+    targetLabel?: string | null
+    statusFrom?: string | null
+    statusTo?: string | null
+    commandId?: string | null
+  }
 }
 
 type AssigneeOption = {
@@ -91,6 +116,9 @@ type PurchasingPermissions = {
   canManageAttachments: boolean
 }
 
+type DetailTabId = 'items' | 'comments' | 'attachments' | 'history'
+type ItemSaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
+
 export default function PurchasingRequestDetailPage({ params }: { params?: { id?: string } }) {
   const id = params?.id ?? null
   const t = useT()
@@ -102,7 +130,10 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
   const [items, setItems] = React.useState<RequestItemRecord[]>([])
   const [comments, setComments] = React.useState<CommentRecord[]>([])
   const [assignees, setAssignees] = React.useState<AssigneeOption[]>([])
+  const [history, setHistory] = React.useState<HistoryRecord[]>([])
+  const [historyLoading, setHistoryLoading] = React.useState(false)
   const [commentBody, setCommentBody] = React.useState('')
+  const [activeTab, setActiveTab] = React.useState<DetailTabId>('items')
   const [isLoading, setIsLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [requestFieldErrors, setRequestFieldErrors] = React.useState<PurchasingFormErrors>({})
@@ -111,6 +142,11 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
   const [commentFieldErrors, setCommentFieldErrors] = React.useState<PurchasingFormErrors>({})
   const [commentFormError, setCommentFormError] = React.useState<string | null>(null)
   const recordRef = React.useRef<RequestRecord | null>(null)
+  const itemsRef = React.useRef<RequestItemRecord[]>([])
+  const itemSaveTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const itemSaveResetTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const itemSavedSnapshotRef = React.useRef<Record<string, string>>({})
+  const [itemSaveStates, setItemSaveStates] = React.useState<Record<string, ItemSaveState>>({})
   const [permissions, setPermissions] = React.useState<PurchasingPermissions>({
     canUpdateRequests: false,
     canViewItems: false,
@@ -181,9 +217,29 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
       const itemPayload = nextPermissions.canViewItems
         ? await readApiResultOrThrow<{ items?: Array<Record<string, unknown>> }>(`/api/purchasing/request-items?requestId=${encodeURIComponent(id)}&page=1&pageSize=100`)
         : { items: [] }
+      const nextItems = (Array.isArray(itemPayload.items) ? itemPayload.items : []).map(mapItemRecord)
+      Object.values(itemSaveTimersRef.current).forEach((timer) => clearTimeout(timer))
+      Object.values(itemSaveResetTimersRef.current).forEach((timer) => clearTimeout(timer))
+      itemSaveTimersRef.current = {}
+      itemSaveResetTimersRef.current = {}
+      itemSavedSnapshotRef.current = Object.fromEntries(
+        nextItems.map((item) => [item.id, serializeRequestItemPayload(item)]),
+      )
+      setItemSaveStates({})
       setRecord(mapRequestRecord(requestEntry))
-      setItems((Array.isArray(itemPayload.items) ? itemPayload.items : []).map(mapItemRecord))
+      setItems(nextItems)
       setComments((Array.isArray(commentPayload.items) ? commentPayload.items : []).map(mapCommentRecord))
+      setHistoryLoading(true)
+      try {
+        const historyPayload = await readApiResultOrThrow<{ items?: Array<Record<string, unknown>> }>(
+          `/api/purchasing/request-history?requestId=${encodeURIComponent(id)}&limit=100`,
+        )
+        setHistory((Array.isArray(historyPayload.items) ? historyPayload.items : []).map(mapHistoryRecord))
+      } catch {
+        setHistory([])
+      } finally {
+        setHistoryLoading(false)
+      }
       setRequestFieldErrors({})
       setRequestFormError(null)
       setItemFieldErrors({})
@@ -195,6 +251,9 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
       setRecord(null)
       setItems([])
       setComments([])
+      setHistory([])
+      itemSavedSnapshotRef.current = {}
+      setItemSaveStates({})
       setPermissions({
         canUpdateRequests: false,
         canViewItems: false,
@@ -212,6 +271,17 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
   React.useEffect(() => {
     recordRef.current = record
   }, [record])
+
+  React.useEffect(() => {
+    itemsRef.current = items
+  }, [items])
+
+  React.useEffect(() => {
+    return () => {
+      Object.values(itemSaveTimersRef.current).forEach((timer) => clearTimeout(timer))
+      Object.values(itemSaveResetTimersRef.current).forEach((timer) => clearTimeout(timer))
+    }
+  }, [])
 
   React.useEffect(() => {
     let cancelled = false
@@ -277,47 +347,56 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
   }, [runMutation, t])
 
   const saveItem = React.useCallback(async (itemId: string) => {
-    const item = items.find((entry) => entry.id === itemId)
-    if (!item) return
+    const item = itemsRef.current.find((entry) => entry.id === itemId)
+    if (!item || !id) return
     const validation = validateRequestItemForm(item, t)
     if (Object.keys(validation.fieldErrors).length > 0) {
       setItemFieldErrors((current) => ({
         ...current,
         [itemId]: validation.fieldErrors,
       }))
-      flash(validation.message ?? t('purchasing.validation.fixHighlightedFields', 'Check the highlighted fields and try again.'), 'error')
+      setItemSaveStates((current) => ({ ...current, [itemId]: 'error' }))
       return
     }
     try {
+      if (itemSaveResetTimersRef.current[itemId]) {
+        clearTimeout(itemSaveResetTimersRef.current[itemId])
+        delete itemSaveResetTimersRef.current[itemId]
+      }
       setItemFieldErrors((current) => {
         const next = { ...current }
         delete next[itemId]
         return next
       })
+      setItemSaveStates((current) => ({ ...current, [itemId]: 'saving' }))
+      const payload = buildRequestItemPayload(item)
       await runMutation({
         operation: () => readApiResultOrThrow<{ ok: boolean }>(
           '/api/purchasing/request-items',
           {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              id: item.id,
-              catalogProductId: item.catalogProductId,
-              sku: item.sku,
-              referenceNumber: item.referenceNumber,
-              productName: item.productName,
-              quantity: item.quantity,
-              itemStatus: item.itemStatus,
-              supplierOrderNumber: item.supplierOrderNumber,
-              purchasingNote: item.purchasingNote,
-            }),
+            body: JSON.stringify(payload),
           },
         ),
         context: { resourceType: 'purchasing.request', resourceId: id },
-        mutationPayload: item,
+        mutationPayload: payload,
       })
-      flash(t('purchasing.items.flash.updated', 'Request item updated.'), 'success')
-      await load()
+      itemSavedSnapshotRef.current[itemId] = serializeRequestItemPayload(item)
+      setItemSaveStates((current) => ({ ...current, [itemId]: 'saved' }))
+      itemSaveResetTimersRef.current[itemId] = setTimeout(() => {
+        setItemSaveStates((current) => (current[itemId] === 'saved' ? { ...current, [itemId]: 'idle' } : current))
+        delete itemSaveResetTimersRef.current[itemId]
+      }, 1500)
+      const requestPayload = await readApiResultOrThrow<{ items?: Array<Record<string, unknown>> }>(
+        `/api/purchasing/requests?id=${encodeURIComponent(id)}&page=1&pageSize=1`,
+      )
+      const requestEntry = Array.isArray(requestPayload.items) ? requestPayload.items[0] : null
+      if (requestEntry) setRecord(mapRequestRecord(requestEntry))
+      const latest = itemsRef.current.find((entry) => entry.id === itemId)
+      if (latest && serializeRequestItemPayload(latest) !== itemSavedSnapshotRef.current[itemId]) {
+        setItemSaveStates((current) => ({ ...current, [itemId]: 'dirty' }))
+      }
     } catch (saveError) {
       const normalized = resolvePurchasingFormError(
         saveError,
@@ -327,10 +406,71 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
         ...current,
         [itemId]: normalized.fieldErrors,
       }))
-      const message = normalized.message
-      flash(message, 'error')
+      setItemSaveStates((current) => ({ ...current, [itemId]: 'error' }))
+      flash(normalized.message, 'error')
     }
-  }, [id, items, load, runMutation, t])
+  }, [id, runMutation, t])
+
+  const queueItemAutosave = React.useCallback((itemId: string, delay = 800) => {
+    if (itemSaveTimersRef.current[itemId]) clearTimeout(itemSaveTimersRef.current[itemId])
+    itemSaveTimersRef.current[itemId] = setTimeout(() => {
+      delete itemSaveTimersRef.current[itemId]
+      void saveItem(itemId)
+    }, delay)
+  }, [saveItem])
+
+  React.useEffect(() => {
+    if (!permissions.canManageItems) return
+    const nextIds = new Set(items.map((item) => item.id))
+    const removedIds = new Set<string>()
+    for (const itemId of Object.keys(itemSavedSnapshotRef.current)) {
+      if (nextIds.has(itemId)) continue
+      removedIds.add(itemId)
+      delete itemSavedSnapshotRef.current[itemId]
+      if (itemSaveTimersRef.current[itemId]) {
+        clearTimeout(itemSaveTimersRef.current[itemId])
+        delete itemSaveTimersRef.current[itemId]
+      }
+      if (itemSaveResetTimersRef.current[itemId]) {
+        clearTimeout(itemSaveResetTimersRef.current[itemId])
+        delete itemSaveResetTimersRef.current[itemId]
+      }
+    }
+    let hasDirtyChanges = false
+    for (const item of items) {
+      const serialized = serializeRequestItemPayload(item)
+      const saved = itemSavedSnapshotRef.current[item.id]
+      if (typeof saved === 'undefined') {
+        itemSavedSnapshotRef.current[item.id] = serialized
+        continue
+      }
+      if (saved === serialized) continue
+      hasDirtyChanges = true
+      queueItemAutosave(item.id)
+    }
+    if (removedIds.size > 0 || hasDirtyChanges) {
+      setItemSaveStates((current) => {
+        let changed = false
+        const next = { ...current }
+        for (const itemId of removedIds) {
+          if (itemId in next) {
+            delete next[itemId]
+            changed = true
+          }
+        }
+        if (hasDirtyChanges) {
+          for (const item of items) {
+            const serialized = serializeRequestItemPayload(item)
+            const saved = itemSavedSnapshotRef.current[item.id]
+            if (saved === serialized || next[item.id] === 'saving' || next[item.id] === 'dirty') continue
+            next[item.id] = 'dirty'
+            changed = true
+          }
+        }
+        return changed ? next : current
+      })
+    }
+  }, [items, permissions.canManageItems, queueItemAutosave])
 
   const removeItem = React.useCallback(async (itemId: string) => {
     if (!permissions.canManageItems) return
@@ -395,6 +535,16 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
     }
   }, [commentBody, id, load, runMutation, t])
 
+  const tabs = React.useMemo(
+    () => [
+      { id: 'items' as const, label: t('purchasing.requests.detail.tabs.items', 'Items') },
+      { id: 'comments' as const, label: t('purchasing.requests.detail.tabs.comments', 'Comments') },
+      { id: 'attachments' as const, label: t('purchasing.requests.detail.tabs.attachments', 'Attachments') },
+      { id: 'history' as const, label: t('purchasing.requests.detail.tabs.history', 'Activity history') },
+    ],
+    [t],
+  )
+
   if (isLoading) {
     return (
       <Page>
@@ -427,7 +577,11 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
             title={(
               <div className="flex min-w-0 items-center gap-3">
                 <span className="truncate">{record.requestNumber}</span>
-                <Badge data-testid="purchasing-detail-request-status" variant={resolveRequestStatusVariant(record.requestStatus)} className="shrink-0">
+                <Badge
+                  data-testid="purchasing-detail-request-status"
+                  variant={resolveRequestStatusVariant(record.requestStatus)}
+                  className={cn('shrink-0 font-semibold', resolveRequestStatusClassName(record.requestStatus))}
+                >
                   {t(`purchasing.requestStatus.${record.requestStatus}`, record.requestStatus)}
                 </Badge>
                 <span className="truncate text-sm font-normal text-muted-foreground">
@@ -524,7 +678,10 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                 <div className="rounded-md border bg-muted/10 p-4">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{t('purchasing.requests.side.workflow', 'Workflow')}</h3>
-                    <Badge variant={resolveRequestStatusVariant(record.requestStatus)}>
+                    <Badge
+                      variant={resolveRequestStatusVariant(record.requestStatus)}
+                      className={cn('font-semibold', resolveRequestStatusClassName(record.requestStatus))}
+                    >
                       {t(`purchasing.requestStatus.${record.requestStatus}`, record.requestStatus)}
                     </Badge>
                   </div>
@@ -596,7 +753,18 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
               </div>
             </section>
 
-            <section className="space-y-4 rounded-lg border bg-card p-4 shadow-sm" data-testid="purchasing-detail-items-section">
+            <DetailTabsLayout
+              className="space-y-6"
+              tabs={tabs}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              sectionAction={null}
+              onSectionAction={() => {}}
+              navAriaLabel={t('purchasing.requests.detail.tabs.label', 'Purchasing request detail sections')}
+              navClassName="gap-4"
+            >
+              {activeTab === 'items' ? (
+                <section className="space-y-4 rounded-lg border bg-card p-4 shadow-sm" data-testid="purchasing-detail-items-section">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
                 <div>
                   <div>
@@ -641,7 +809,10 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                                         <span>{t('purchasing.items.fields.referenceNumber', 'Reference number')}: {item.referenceNumber || '—'}</span>
                                       </div>
                                       <div className="flex flex-wrap items-center gap-2">
-                                        <Badge variant={resolveItemStatusVariant(item.itemStatus)}>
+                                        <Badge
+                                          variant={resolveItemStatusVariant(item.itemStatus)}
+                                          className={cn('font-semibold', resolveItemStatusClassName(item.itemStatus))}
+                                        >
                                           {t(`purchasing.itemStatus.${item.itemStatus}`, item.itemStatus)}
                                         </Badge>
                                         {item.catalogProductId ? (
@@ -656,7 +827,13 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                                         <Textarea
                                           data-testid={`purchasing-detail-item-note-${index}`}
                                           value={item.purchasingNote ?? ''}
-                                          onChange={(event) => setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, purchasingNote: event.target.value } : entry))}
+                                          onChange={(event) => {
+                                            setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, purchasingNote: event.target.value } : entry))
+                                            setItemFieldErrors((current) => ({
+                                              ...current,
+                                              [item.id]: clearFieldError(current[item.id] ?? {}, 'purchasingNote'),
+                                            }))
+                                          }}
                                           rows={2}
                                           placeholder={t('purchasing.items.fields.purchasingNote', 'Purchasing note')}
                                           readOnly={!permissions.canManageItems}
@@ -691,7 +868,13 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                                         data-testid={`purchasing-detail-item-status-${index}`}
                                         className={selectClassName()}
                                         value={item.itemStatus}
-                                        onChange={(event) => setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, itemStatus: event.target.value } : entry))}
+                                        onChange={(event) => {
+                                          setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, itemStatus: event.target.value } : entry))
+                                          setItemFieldErrors((current) => ({
+                                            ...current,
+                                            [item.id]: clearFieldError(current[item.id] ?? {}, 'itemStatus'),
+                                          }))
+                                        }}
                                         disabled={!permissions.canManageItems}
                                       >
                                         {itemStatusViewValues.map((status) => (
@@ -707,7 +890,13 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                                       <Input
                                         data-testid={`purchasing-detail-item-supplier-order-${index}`}
                                         value={item.supplierOrderNumber ?? ''}
-                                        onChange={(event) => setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, supplierOrderNumber: event.target.value } : entry))}
+                                        onChange={(event) => {
+                                          setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, supplierOrderNumber: event.target.value } : entry))
+                                          setItemFieldErrors((current) => ({
+                                            ...current,
+                                            [item.id]: clearFieldError(current[item.id] ?? {}, 'supplierOrderNumber'),
+                                          }))
+                                        }}
                                         placeholder={t('purchasing.items.fields.supplierOrderNumber', 'Supplier order number')}
                                         readOnly={!permissions.canManageItems}
                                       />
@@ -715,10 +904,25 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                                   </TableCell>
                                   <TableCell className="text-right">
                                     {permissions.canManageItems ? (
-                                      <div className="flex justify-end gap-2">
-                                        <Button data-testid={`purchasing-detail-item-save-${index}`} type="button" variant="outline" size="sm" onClick={() => { void saveItem(item.id) }}>
-                                          {t('purchasing.items.actions.save', 'Save item')}
-                                        </Button>
+                                      <div className="flex items-center justify-end gap-2">
+                                        <span
+                                          className={cn(
+                                            'text-xs font-medium',
+                                            itemSaveStates[item.id] === 'error' ? 'text-destructive' : 'text-muted-foreground',
+                                            itemSaveStates[item.id] === 'saved' ? 'text-emerald-600' : null,
+                                          )}
+                                          data-testid={`purchasing-detail-item-autosave-${index}`}
+                                        >
+                                          {itemSaveStates[item.id] === 'saving'
+                                            ? t('purchasing.items.autosave.saving', 'Saving...')
+                                            : itemSaveStates[item.id] === 'saved'
+                                              ? t('purchasing.items.autosave.saved', 'Saved')
+                                              : itemSaveStates[item.id] === 'error'
+                                                ? t('purchasing.items.autosave.error', 'Save failed')
+                                                : itemSaveStates[item.id] === 'dirty'
+                                                  ? t('purchasing.items.autosave.pending', 'Saving soon')
+                                                  : t('purchasing.items.autosave.idle', 'Up to date')}
+                                        </span>
                                         <Button
                                           data-testid={`purchasing-detail-item-remove-${index}`}
                                           type="button"
@@ -740,9 +944,11 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                   </div>
                 ) : null}
               </div>
-            </section>
+                </section>
+              ) : null}
 
-            <section className="space-y-4 rounded-lg border bg-card p-4 shadow-sm" data-testid="purchasing-detail-comments-section">
+              {activeTab === 'comments' ? (
+                <section className="space-y-4 rounded-lg border bg-card p-4 shadow-sm" data-testid="purchasing-detail-comments-section">
               <div>
                 <h2 className="text-xl font-semibold">{t('purchasing.comments.section.title', 'Comments')}</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
@@ -757,8 +963,25 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                 ) : null}
                 {comments.map((comment) => (
                   <div key={comment.id} className="space-y-3 rounded-xl border p-4">
-                    <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{formatDateLabel(comment.createdAt)}</div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">
+                          {comment.authorName ?? comment.authorEmail ?? comment.authorUserId ?? t('purchasing.comments.author.system', 'System')}
+                        </div>
+                        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{formatDateLabel(comment.createdAt)}</div>
+                      </div>
+                    </div>
                     <p className="whitespace-pre-wrap text-sm">{comment.body}</p>
+                    {permissions.canViewAttachments ? (
+                      <AttachmentsSection
+                        entityId={E.purchasing.purchasing_comment}
+                        recordId={comment.id}
+                        title={t('purchasing.attachments.comment.title', 'Comment attachments')}
+                        description={t('purchasing.attachments.comment.description', 'Attach supplier offers, screenshots, or supporting files directly to this comment.')}
+                        showHeader={false}
+                        onChanged={() => { void load() }}
+                      />
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -788,9 +1011,11 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                   </div>
                 </div>
               ) : null}
-            </section>
+                </section>
+              ) : null}
 
-            <section className="space-y-4 rounded-lg border bg-card p-4 shadow-sm" data-testid="purchasing-detail-attachments-section">
+              {activeTab === 'attachments' ? (
+                <section className="space-y-4 rounded-lg border bg-card p-4 shadow-sm" data-testid="purchasing-detail-attachments-section">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-semibold">{t('purchasing.attachments.request.title', 'Request attachments')}</h2>
@@ -816,7 +1041,40 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                   {t('purchasing.attachments.request.unavailable', 'Attachments are still unavailable for this session. Refresh the page after RBAC updates are applied.')}
                 </div>
               )}
-            </section>
+                </section>
+              ) : null}
+
+              {activeTab === 'history' ? (
+                <section className="space-y-4 rounded-lg border bg-card p-4 shadow-sm" data-testid="purchasing-detail-history-section">
+                  <div>
+                    <h2 className="text-xl font-semibold">{t('purchasing.history.section.title', 'Activity history')}</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {t('purchasing.history.section.helper', 'Track status transitions, comments, and request workflow actions over time.')}
+                    </p>
+                  </div>
+                  {historyLoading ? (
+                    <LoadingMessage label={t('purchasing.history.loading', 'Loading activity history...')} />
+                  ) : null}
+                  {!historyLoading && history.length === 0 ? (
+                    <div className="rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">
+                      {t('purchasing.history.empty', 'No activity has been recorded for this request yet.')}
+                    </div>
+                  ) : null}
+                  {!historyLoading && history.length > 0 ? (
+                    <div className="space-y-3">
+                      {history.map((entry, index) => (
+                        <HistoryEntryCard
+                          key={entry.id}
+                          entry={entry}
+                          isLast={index === history.length - 1}
+                          t={t}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
+            </DetailTabsLayout>
           </section>
         </div>
       </PageBody>
@@ -863,8 +1121,83 @@ function mapCommentRecord(item: Record<string, unknown>): CommentRecord {
   return {
     id: typeof item.id === 'string' ? item.id : '',
     body: typeof item.body === 'string' ? item.body : '',
+    authorUserId:
+      typeof item.authorUserId === 'string'
+        ? item.authorUserId
+        : typeof item.author_user_id === 'string'
+          ? item.author_user_id
+          : null,
+    authorName:
+      typeof item.authorName === 'string'
+        ? item.authorName
+        : typeof item.author_name === 'string'
+          ? item.author_name
+          : null,
+    authorEmail:
+      typeof item.authorEmail === 'string'
+        ? item.authorEmail
+        : typeof item.author_email === 'string'
+          ? item.author_email
+          : null,
     createdAt: typeof item.createdAt === 'string' ? item.createdAt : typeof item.created_at === 'string' ? item.created_at : null,
   }
+}
+
+function mapHistoryRecord(item: Record<string, unknown>): HistoryRecord {
+  const actorCandidate = item.actor
+  const metadataCandidate = item.metadata
+  return {
+    id: typeof item.id === 'string' ? item.id : '',
+    occurredAt: typeof item.occurredAt === 'string' ? item.occurredAt : typeof item.occurred_at === 'string' ? item.occurred_at : new Date().toISOString(),
+    kind: item.kind === 'status' || item.kind === 'action' || item.kind === 'comment' ? item.kind : 'action',
+    action: typeof item.action === 'string' ? item.action : '',
+    actor: actorCandidate && typeof actorCandidate === 'object'
+      ? {
+          id: typeof (actorCandidate as { id?: unknown }).id === 'string' ? (actorCandidate as { id?: string }).id ?? null : null,
+          label: typeof (actorCandidate as { label?: unknown }).label === 'string' ? (actorCandidate as { label?: string }).label ?? 'system' : 'system',
+        }
+      : { id: null, label: 'system' },
+    metadata: metadataCandidate && typeof metadataCandidate === 'object'
+      ? {
+          targetType:
+            (metadataCandidate as { targetType?: unknown }).targetType === 'request'
+            || (metadataCandidate as { targetType?: unknown }).targetType === 'item'
+            || (metadataCandidate as { targetType?: unknown }).targetType === 'comment'
+              ? (metadataCandidate as { targetType?: 'request' | 'item' | 'comment' }).targetType
+              : undefined,
+          targetLabel: typeof (metadataCandidate as { targetLabel?: unknown }).targetLabel === 'string'
+            ? (metadataCandidate as { targetLabel?: string }).targetLabel ?? null
+            : null,
+          statusFrom: typeof (metadataCandidate as { statusFrom?: unknown }).statusFrom === 'string'
+            ? (metadataCandidate as { statusFrom?: string }).statusFrom ?? null
+            : null,
+          statusTo: typeof (metadataCandidate as { statusTo?: unknown }).statusTo === 'string'
+            ? (metadataCandidate as { statusTo?: string }).statusTo ?? null
+            : null,
+          commandId: typeof (metadataCandidate as { commandId?: unknown }).commandId === 'string'
+            ? (metadataCandidate as { commandId?: string }).commandId ?? null
+            : null,
+        }
+      : undefined,
+  }
+}
+
+function buildRequestItemPayload(item: RequestItemRecord) {
+  return {
+    id: item.id,
+    catalogProductId: item.catalogProductId,
+    sku: item.sku,
+    referenceNumber: item.referenceNumber,
+    productName: item.productName,
+    quantity: item.quantity,
+    itemStatus: item.itemStatus,
+    supplierOrderNumber: item.supplierOrderNumber,
+    purchasingNote: item.purchasingNote,
+  }
+}
+
+function serializeRequestItemPayload(item: RequestItemRecord): string {
+  return JSON.stringify(buildRequestItemPayload(item))
 }
 
 function formatDateLabel(value?: string | null): string {
@@ -872,6 +1205,63 @@ function formatDateLabel(value?: string | null): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString()
+}
+
+function HistoryEntryCard({
+  entry,
+  isLast,
+  t,
+}: {
+  entry: HistoryRecord
+  isLast: boolean
+  t: ReturnType<typeof useT>
+}) {
+  const occurredAt = formatDateTime(entry.occurredAt) ?? formatDateLabel(entry.occurredAt)
+  const relativeTime = formatRelativeTime(entry.occurredAt)
+  const statusFrom = entry.metadata?.statusFrom
+  const statusTo = entry.metadata?.statusTo
+
+  return (
+    <div className="relative flex gap-3">
+      {!isLast ? (
+        <div className="absolute left-[11px] top-6 bottom-0 w-px bg-border" aria-hidden />
+      ) : null}
+      <div className="relative z-10 mt-1 h-6 w-6 rounded-full border bg-muted" />
+      <div className="flex-1 rounded-xl border bg-card p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-sm font-medium">{entry.actor.label}</div>
+          <div className="text-xs text-muted-foreground" title={occurredAt}>
+            {relativeTime ?? occurredAt}
+          </div>
+        </div>
+        <div className="mt-2 space-y-2">
+          {entry.kind === 'status' ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-muted-foreground">
+                {entry.metadata?.targetLabel ?? t('purchasing.history.requestLabel', 'Request')}
+              </span>
+              <Badge variant="outline">
+                {statusFrom ?? t('purchasing.history.statusUnknown', 'Unknown')}
+              </Badge>
+              <span className="text-muted-foreground">{t('purchasing.history.to', 'to')}</span>
+              <Badge variant="secondary">
+                {statusTo ?? t('purchasing.history.statusUnknown', 'Unknown')}
+              </Badge>
+            </div>
+          ) : (
+            <div className="whitespace-pre-wrap text-sm">{entry.action}</div>
+          )}
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">
+            {entry.kind === 'comment'
+              ? t('purchasing.history.kind.comment', 'Comment')
+              : entry.kind === 'status'
+                ? t('purchasing.history.kind.status', 'Status change')
+                : t('purchasing.history.kind.action', 'Action')}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function RequestInfoStat({ label, value }: { label: string; value: string }) {

@@ -9,10 +9,16 @@ import { DataTable, withDataTableNamespaces } from '@open-mercato/ui/backend/Dat
 import { Badge } from '@open-mercato/ui/primitives/badge'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
-import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { apiCall, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { normalizeRequestStatusForView, requestStatusViewValues, resolveRequestStatusVariant } from '../../../lib/statuses'
+import { cn } from '@open-mercato/shared/lib/utils'
+import {
+  normalizeRequestStatusForView,
+  requestStatusViewValues,
+  resolveRequestStatusClassName,
+  resolveRequestStatusVariant,
+} from '../../../lib/statuses'
 
 const PAGE_SIZE = 50
 
@@ -39,6 +45,10 @@ type AssigneeOption = {
   label: string
 }
 
+type FeatureCheckResponse = {
+  userId?: string
+}
+
 export default function PurchasingRequestsPage() {
   const t = useT()
   const router = useRouter()
@@ -52,6 +62,8 @@ export default function PurchasingRequestsPage() {
   const [purchasingOwnerUserId, setPurchasingOwnerUserId] = React.useState('')
   const [createdFrom, setCreatedFrom] = React.useState('')
   const [createdTo, setCreatedTo] = React.useState('')
+  const [onlyMine, setOnlyMine] = React.useState(false)
+  const [currentUserId, setCurrentUserId] = React.useState<string | null>(null)
   const [assignees, setAssignees] = React.useState<AssigneeOption[]>([])
   const [isLoading, setIsLoading] = React.useState(true)
   const [sorting, setSorting] = React.useState<SortingState>([{ id: 'updatedAt', desc: true }])
@@ -79,6 +91,7 @@ export default function PurchasingRequestsPage() {
       status: t('purchasing.requests.filters.status', 'Status'),
       owner: t('purchasing.requests.filters.owner', 'Purchasing owner'),
       ownerAll: t('purchasing.requests.filters.ownerAll', 'All owners'),
+      onlyMine: t('purchasing.requests.filters.onlyMine', 'Submitted by me'),
       statusAll: t('purchasing.requests.filters.statusAll', 'All statuses'),
       createdFrom: t('purchasing.requests.filters.createdFrom', 'Created from'),
       createdTo: t('purchasing.requests.filters.createdTo', 'Created to'),
@@ -116,7 +129,10 @@ export default function PurchasingRequestsPage() {
       header: labels.table.status,
       meta: { priority: 3 },
       cell: ({ row }) => (
-        <Badge variant={resolveRequestStatusVariant(row.original.requestStatus)}>
+        <Badge
+          variant={resolveRequestStatusVariant(row.original.requestStatus)}
+          className={cn('font-semibold', resolveRequestStatusClassName(row.original.requestStatus))}
+        >
           {t(`purchasing.requestStatus.${row.original.requestStatus}`, row.original.requestStatus)}
         </Badge>
       ),
@@ -145,6 +161,7 @@ export default function PurchasingRequestsPage() {
       if (search.trim().length) params.set('search', search.trim())
       if (requestStatus) params.set('requestStatus', requestStatus)
       if (purchasingOwnerUserId) params.set('purchasingOwnerUserId', purchasingOwnerUserId)
+      if (onlyMine && currentUserId) params.set('salesOwnerUserId', currentUserId)
       if (createdFrom) params.set('createdFrom', createdFrom)
       if (createdTo) params.set('createdTo', createdTo)
       const activeSort = sorting[0]
@@ -168,19 +185,32 @@ export default function PurchasingRequestsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [createdFrom, createdTo, labels.errors.load, page, purchasingOwnerUserId, requestStatus, search, sorting])
+  }, [createdFrom, createdTo, currentUserId, labels.errors.load, onlyMine, page, purchasingOwnerUserId, requestStatus, search, sorting])
 
   React.useEffect(() => {
     let cancelled = false
-    async function loadAssignees() {
+    async function loadLookupData() {
       try {
-        const payload = await readApiResultOrThrow<{ items?: AssigneeOption[] }>('/api/purchasing/assignees')
-        if (!cancelled) setAssignees(Array.isArray(payload.items) ? payload.items : [])
+        const [payload, featureCheck] = await Promise.all([
+          readApiResultOrThrow<{ items?: AssigneeOption[] }>('/api/purchasing/assignees'),
+          apiCall<FeatureCheckResponse>('/api/auth/feature-check', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ features: [] }),
+          }),
+        ])
+        if (!cancelled) {
+          setAssignees(Array.isArray(payload.items) ? payload.items : [])
+          setCurrentUserId(typeof featureCheck.result?.userId === 'string' ? featureCheck.result.userId : null)
+        }
       } catch {
-        if (!cancelled) setAssignees([])
+        if (!cancelled) {
+          setAssignees([])
+          setCurrentUserId(null)
+        }
       }
     }
-    void loadAssignees()
+    void loadLookupData()
     return () => { cancelled = true }
   }, [])
 
@@ -194,6 +224,7 @@ export default function PurchasingRequestsPage() {
     setPurchasingOwnerUserId('')
     setCreatedFrom('')
     setCreatedTo('')
+    setOnlyMine(false)
     setPage(1)
   }, [])
 
@@ -216,120 +247,139 @@ export default function PurchasingRequestsPage() {
             </div>
           </section>
 
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <RequestMetricCard label={t('purchasing.requests.metrics.totalRequests', 'Requests')} value={String(stats.totalRequests)} />
-            <RequestMetricCard label={t('purchasing.requests.metrics.totalItems', 'Products in requests')} value={String(stats.totalItems)} />
-            <RequestMetricCard label={t('purchasing.requests.metrics.unassigned', 'Unassigned')} value={String(stats.unassigned)} />
-            <RequestMetricCard label={t('purchasing.requests.metrics.toHandle', 'Open items')} value={String(stats.totalOpenItems)} />
-          </section>
-
-          <section className="rounded-lg border bg-card p-4 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold">{labels.filters.title}</h2>
-              </div>
-              <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
-                {labels.actions.clearFilters}
-              </Button>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_220px_280px_180px_180px]">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">{labels.filters.search}</label>
-                <Input
-                  value={search}
-                  onChange={(event) => {
-                    setSearch(event.target.value)
-                    setPage(1)
+          <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,4fr)_minmax(280px,1fr)]">
+            <div className="min-w-0 space-y-0">
+              <div className="rounded-lg border bg-card p-2 shadow-sm">
+                <DataTable<RequestRow>
+                  title={labels.title}
+                  data={rows}
+                  columns={columns}
+                  isLoading={isLoading}
+                  emptyState={<p className="py-8 text-center text-sm text-muted-foreground">{labels.table.empty}</p>}
+                  refreshButton={{
+                    label: labels.actions.refresh,
+                    onRefresh: loadRows,
+                    isRefreshing: isLoading,
                   }}
-                  placeholder={labels.filters.search}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">{labels.filters.status}</label>
-                <select
-                  className="flex h-10 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                  value={requestStatus}
-                  onChange={(event) => {
-                    setRequestStatus(event.target.value)
-                    setPage(1)
+                  sortable
+                  sorting={sorting}
+                  onSortingChange={setSorting}
+                  pagination={{
+                    page,
+                    pageSize: PAGE_SIZE,
+                    total,
+                    totalPages,
+                    onPageChange: setPage,
                   }}
-                >
-                  <option value="">{labels.filters.statusAll}</option>
-                  {requestStatusViewValues.map((status) => (
-                    <option key={status} value={status}>
-                      {t(`purchasing.requestStatus.${status}`, status)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">{labels.filters.owner}</label>
-                <select
-                  className="flex h-10 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                  value={purchasingOwnerUserId}
-                  onChange={(event) => {
-                    setPurchasingOwnerUserId(event.target.value)
-                    setPage(1)
-                  }}
-                >
-                  <option value="">{labels.filters.ownerAll}</option>
-                  {assignees.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">{labels.filters.createdFrom}</label>
-                <Input
-                  type="date"
-                  value={createdFrom}
-                  onChange={(event) => {
-                    setCreatedFrom(event.target.value)
-                    setPage(1)
-                  }}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">{labels.filters.createdTo}</label>
-                <Input
-                  type="date"
-                  value={createdTo}
-                  onChange={(event) => {
-                    setCreatedTo(event.target.value)
-                    setPage(1)
+                  onRowClick={(row) => {
+                    router.push(`/backend/purchasing/requests/${encodeURIComponent(row.id)}`)
                   }}
                 />
               </div>
             </div>
-          </section>
 
-          <div className="rounded-lg border bg-card p-2 shadow-sm">
-            <DataTable<RequestRow>
-              title={labels.title}
-              data={rows}
-              columns={columns}
-              isLoading={isLoading}
-              emptyState={<p className="py-8 text-center text-sm text-muted-foreground">{labels.table.empty}</p>}
-              refreshButton={{
-                label: labels.actions.refresh,
-                onRefresh: loadRows,
-                isRefreshing: isLoading,
-              }}
-              sortable
-              sorting={sorting}
-              onSortingChange={setSorting}
-              pagination={{
-                page,
-                pageSize: PAGE_SIZE,
-                total,
-                totalPages,
-                onPageChange: setPage,
-              }}
-              onRowClick={(row) => {
-                router.push(`/backend/purchasing/requests/${encodeURIComponent(row.id)}`)
-              }}
-            />
-          </div>
+            <div className="space-y-4 xl:sticky xl:top-4">
+              <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <RequestMetricCard label={t('purchasing.requests.metrics.totalRequests', 'Requests')} value={String(stats.totalRequests)} />
+                <RequestMetricCard label={t('purchasing.requests.metrics.totalItems', 'Products in requests')} value={String(stats.totalItems)} />
+                <RequestMetricCard label={t('purchasing.requests.metrics.unassigned', 'Unassigned')} value={String(stats.unassigned)} />
+                <RequestMetricCard label={t('purchasing.requests.metrics.toHandle', 'Open items')} value={String(stats.totalOpenItems)} />
+              </section>
+
+              <section className="rounded-lg border bg-card p-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold">{labels.filters.title}</h2>
+                  </div>
+                  <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
+                    {labels.actions.clearFilters}
+                  </Button>
+                </div>
+                <div className="mt-4 space-y-3">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">{labels.filters.search}</label>
+                    <Input
+                      value={search}
+                      onChange={(event) => {
+                        setSearch(event.target.value)
+                        setPage(1)
+                      }}
+                      placeholder={labels.filters.search}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">{labels.filters.status}</label>
+                    <select
+                      className="flex h-10 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                      value={requestStatus}
+                      onChange={(event) => {
+                        setRequestStatus(event.target.value)
+                        setPage(1)
+                      }}
+                    >
+                      <option value="">{labels.filters.statusAll}</option>
+                      {requestStatusViewValues.map((status) => (
+                        <option key={status} value={status}>
+                          {t(`purchasing.requestStatus.${status}`, status)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">{labels.filters.owner}</label>
+                    <select
+                      className="flex h-10 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                      value={purchasingOwnerUserId}
+                      onChange={(event) => {
+                        setPurchasingOwnerUserId(event.target.value)
+                        setPage(1)
+                      }}
+                    >
+                      <option value="">{labels.filters.ownerAll}</option>
+                      {assignees.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">{labels.filters.createdFrom}</label>
+                    <Input
+                      type="date"
+                      value={createdFrom}
+                      onChange={(event) => {
+                        setCreatedFrom(event.target.value)
+                        setPage(1)
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">{labels.filters.createdTo}</label>
+                    <Input
+                      type="date"
+                      value={createdTo}
+                      onChange={(event) => {
+                        setCreatedTo(event.target.value)
+                        setPage(1)
+                      }}
+                    />
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm font-medium">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border"
+                      checked={onlyMine}
+                      disabled={!currentUserId}
+                      onChange={(event) => {
+                        setOnlyMine(event.target.checked)
+                        setPage(1)
+                      }}
+                    />
+                    <span>{labels.filters.onlyMine}</span>
+                  </label>
+                </div>
+              </section>
+            </div>
+          </section>
         </div>
       </PageBody>
     </Page>

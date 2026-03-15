@@ -16,7 +16,7 @@ export const metadata = {
   pageTitleKey: 'purchasing.nav.root',
   pageGroup: 'Operations',
   pageGroupKey: 'purchasing.nav.group',
-  pageOrder: 120,
+  pagePriority: 12,
+  pageOrder: 12,
   icon: purchasingIcon,
 }
-

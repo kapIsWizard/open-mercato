@@ -20,6 +20,7 @@ import {
   requireRequestInScope,
   requireRequestItemInScope,
   requireScope,
+  serializePurchasingRequestItemSnapshot,
 } from './shared'
 import { normalizeItemStatusForStorage, normalizeItemStatusForView } from '../lib/statuses'
 
@@ -69,20 +70,33 @@ const createItemCommand: CommandHandler<Record<string, unknown>, PurchasingReque
     })
     return item
   },
+  captureAfter: async (_input, result) => serializePurchasingRequestItemSnapshot(result),
   buildLog: async ({ result }) => {
     const { translate } = await resolveTranslations()
     return {
       actionLabel: translate('purchasing.audit.items.create', 'Create purchasing request item'),
       resourceKind: 'purchasing.request_item',
       resourceId: result.id,
+      parentResourceKind: 'purchasing.request',
+      parentResourceId: result.requestId,
       tenantId: result.tenantId ?? null,
       organizationId: result.organizationId ?? null,
+      snapshotAfter: serializePurchasingRequestItemSnapshot(result),
     }
   },
 }
 
 const updateItemCommand: CommandHandler<Record<string, unknown>, PurchasingRequestItem> = {
   id: 'purchasing.request-items.update',
+  async prepare(rawInput, ctx) {
+    const scope = requireScope(ctx)
+    const parsed = purchasingRequestItemUpdateSchema.parse(applyScopedInput(rawInput, scope))
+    const em = (ctx.container.resolve('em') as EntityManager)
+    const item = await requireRequestItemInScope(em, scope, parsed.id)
+    return {
+      before: serializePurchasingRequestItemSnapshot(item),
+    }
+  },
   async execute(rawInput, ctx) {
     const scope = requireScope(ctx)
     const parsed = purchasingRequestItemUpdateSchema.parse(applyScopedInput(rawInput, scope))
@@ -148,20 +162,34 @@ const updateItemCommand: CommandHandler<Record<string, unknown>, PurchasingReque
     })
     return item
   },
-  buildLog: async ({ result }) => {
+  captureAfter: async (_input, result) => serializePurchasingRequestItemSnapshot(result),
+  buildLog: async ({ result, snapshots }) => {
     const { translate } = await resolveTranslations()
     return {
       actionLabel: translate('purchasing.audit.items.update', 'Update purchasing request item'),
       resourceKind: 'purchasing.request_item',
       resourceId: result.id,
+      parentResourceKind: 'purchasing.request',
+      parentResourceId: result.requestId,
       tenantId: result.tenantId ?? null,
       organizationId: result.organizationId ?? null,
+      snapshotBefore: snapshots.before ?? null,
+      snapshotAfter: snapshots.after ?? serializePurchasingRequestItemSnapshot(result),
     }
   },
 }
 
 const deleteItemCommand: CommandHandler<Record<string, unknown>, PurchasingRequestItem> = {
   id: 'purchasing.request-items.delete',
+  async prepare(rawInput, ctx) {
+    const scope = requireScope(ctx)
+    const parsed = purchasingRequestItemDeleteSchema.parse(rawInput)
+    const em = (ctx.container.resolve('em') as EntityManager)
+    const item = await requireRequestItemInScope(em, scope, parsed.id)
+    return {
+      before: serializePurchasingRequestItemSnapshot(item),
+    }
+  },
   async execute(rawInput, ctx) {
     const scope = requireScope(ctx)
     const parsed = purchasingRequestItemDeleteSchema.parse(rawInput)
@@ -187,14 +215,17 @@ const deleteItemCommand: CommandHandler<Record<string, unknown>, PurchasingReque
     })
     return item
   },
-  buildLog: async ({ result }) => {
+  buildLog: async ({ result, snapshots }) => {
     const { translate } = await resolveTranslations()
     return {
       actionLabel: translate('purchasing.audit.items.delete', 'Delete purchasing request item'),
       resourceKind: 'purchasing.request_item',
       resourceId: result.id,
+      parentResourceKind: 'purchasing.request',
+      parentResourceId: result.requestId,
       tenantId: result.tenantId ?? null,
       organizationId: result.organizationId ?? null,
+      snapshotBefore: snapshots.before ?? null,
     }
   },
 }

@@ -7,11 +7,15 @@ import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable, withDataTableNamespaces } from '@open-mercato/ui/backend/DataTable'
 import { Badge } from '@open-mercato/ui/primitives/badge'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { Checkbox } from '@open-mercato/ui/primitives/checkbox'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { itemStatusViewValues, normalizeItemStatusForView, resolveItemStatusVariant } from '../../../lib/statuses'
+import { cn } from '@open-mercato/shared/lib/utils'
+import { itemStatusViewValues, normalizeItemStatusForView, resolveItemStatusClassName, resolveItemStatusVariant } from '../../../lib/statuses'
 
 const PAGE_SIZE = 50
 
@@ -38,6 +42,9 @@ export default function PurchasingRequestItemsPage() {
   const t = useT()
   const router = useRouter()
   const scopeVersion = useOrganizationScopeVersion()
+  const { runMutation } = useGuardedMutation<{ resourceType: string; resourceId: string | null }>({
+    contextId: 'purchasing.request-items.list',
+  })
   const [rows, setRows] = React.useState<ItemRow[]>([])
   const [page, setPage] = React.useState(1)
   const [total, setTotal] = React.useState(0)
@@ -48,6 +55,9 @@ export default function PurchasingRequestItemsPage() {
   const [referenceFilter, setReferenceFilter] = React.useState('')
   const [isLoading, setIsLoading] = React.useState(true)
   const [sorting, setSorting] = React.useState<SortingState>([{ id: 'updatedAt', desc: true }])
+  const [selectedIds, setSelectedIds] = React.useState<string[]>([])
+  const [bulkStatus, setBulkStatus] = React.useState('')
+  const [isApplyingBulkStatus, setIsApplyingBulkStatus] = React.useState(false)
 
   const labels = React.useMemo(() => ({
     title: t('purchasing.items.page.title', 'Purchasing items'),
@@ -66,6 +76,9 @@ export default function PurchasingRequestItemsPage() {
       refresh: t('purchasing.items.actions.refresh', 'Refresh'),
       allStatuses: t('purchasing.items.filters.allStatuses', 'All statuses'),
       clearFilters: t('purchasing.items.actions.clearFilters', 'Clear filters'),
+      applyBulkStatus: t('purchasing.items.actions.applyBulkStatus', 'Apply status'),
+      selectedCount: t('purchasing.items.bulk.selectedCount', '{count} selected', { count: selectedIds.length }),
+      clearSelection: t('purchasing.items.bulk.clearSelection', 'Clear selection'),
     },
     filters: {
       title: t('purchasing.items.filters.title', 'Filters'),
@@ -73,13 +86,55 @@ export default function PurchasingRequestItemsPage() {
       status: t('purchasing.items.filters.status', 'Status'),
       sku: t('purchasing.items.filters.sku', 'SKU'),
       referenceNumber: t('purchasing.items.filters.referenceNumber', 'Reference number'),
+      bulkStatus: t('purchasing.items.bulk.status', 'Bulk status update'),
     },
     errors: {
       load: t('purchasing.items.errors.load', 'Failed to load purchasing items.'),
+      bulkUpdate: t('purchasing.items.errors.bulkUpdate', 'Failed to update selected items.'),
     },
-  }), [t])
+  }), [selectedIds.length, t])
 
   const columns = React.useMemo<ColumnDef<ItemRow>[]>(() => [
+    {
+      id: 'select',
+      header: () => {
+        const visibleIds = rows.map((row) => row.id).filter((value) => value.length > 0)
+        const selectedOnPage = visibleIds.filter((id) => selectedIds.includes(id))
+        const allSelected = visibleIds.length > 0 && selectedOnPage.length === visibleIds.length
+        const partiallySelected = selectedOnPage.length > 0 && !allSelected
+        return (
+          <Checkbox
+            checked={allSelected ? true : (partiallySelected ? 'indeterminate' : false)}
+            aria-label={t('purchasing.items.bulk.selectAll', 'Select all visible items')}
+            onClick={(event) => event.stopPropagation()}
+            onCheckedChange={(checked) => {
+              const shouldSelect = checked === true
+              setSelectedIds((current) => {
+                if (shouldSelect) {
+                  return Array.from(new Set([...current, ...visibleIds]))
+                }
+                return current.filter((id) => !visibleIds.includes(id))
+              })
+            }}
+          />
+        )
+      },
+      cell: ({ row }) => (
+        <Checkbox
+          checked={selectedIds.includes(row.original.id)}
+          aria-label={t('purchasing.items.bulk.selectRow', 'Select item')}
+          onClick={(event) => event.stopPropagation()}
+          onCheckedChange={(checked) => {
+            setSelectedIds((current) => {
+              if (checked === true) return Array.from(new Set([...current, row.original.id]))
+              return current.filter((id) => id !== row.original.id)
+            })
+          }}
+        />
+      ),
+      enableSorting: false,
+      meta: { priority: 0, sticky: true },
+    },
     {
       accessorKey: 'requestId',
       header: labels.table.request,
@@ -113,7 +168,10 @@ export default function PurchasingRequestItemsPage() {
       header: labels.table.status,
       meta: { priority: 6 },
       cell: ({ row }) => (
-        <Badge variant={resolveItemStatusVariant(row.original.itemStatus)}>
+        <Badge
+          variant={resolveItemStatusVariant(row.original.itemStatus)}
+          className={cn('font-semibold', resolveItemStatusClassName(row.original.itemStatus))}
+        >
           {t(`purchasing.itemStatus.${row.original.itemStatus}`, row.original.itemStatus)}
         </Badge>
       ),
@@ -130,7 +188,7 @@ export default function PurchasingRequestItemsPage() {
       meta: { priority: 8 },
       cell: ({ row }) => formatDateLabel(row.original.updatedAt),
     },
-  ], [labels, t])
+  ], [labels, rows, selectedIds, t])
 
   const loadRows = React.useCallback(async () => {
     setIsLoading(true)
@@ -170,6 +228,10 @@ export default function PurchasingRequestItemsPage() {
     void loadRows()
   }, [loadRows, scopeVersion])
 
+  React.useEffect(() => {
+    setSelectedIds((current) => current.filter((id) => rows.some((row) => row.id === id)))
+  }, [rows])
+
   const clearFilters = React.useCallback(() => {
     setSearch('')
     setStatusFilter('')
@@ -177,6 +239,48 @@ export default function PurchasingRequestItemsPage() {
     setReferenceFilter('')
     setPage(1)
   }, [])
+
+  const applyBulkStatus = React.useCallback(async () => {
+    if (!bulkStatus || selectedIds.length === 0) return
+    const selectedRows = rows.filter((row) => selectedIds.includes(row.id))
+    if (selectedRows.length === 0) return
+    setIsApplyingBulkStatus(true)
+    try {
+      await runMutation({
+        operation: async () => {
+          for (const row of selectedRows) {
+            await readApiResultOrThrow(
+              '/api/purchasing/request-items',
+              {
+                method: 'PUT',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  id: row.id,
+                  itemStatus: bulkStatus,
+                }),
+              },
+              { errorMessage: labels.errors.bulkUpdate },
+            )
+          }
+          return { ok: true }
+        },
+        context: { resourceType: 'purchasing.request_item.bulk', resourceId: null },
+        mutationPayload: { ids: selectedIds, itemStatus: bulkStatus },
+      })
+      flash(
+        t('purchasing.items.flash.bulkUpdated', 'Updated {count} selected items.', { count: selectedRows.length }),
+        'success',
+      )
+      setSelectedIds([])
+      setBulkStatus('')
+      await loadRows()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : labels.errors.bulkUpdate
+      flash(message, 'error')
+    } finally {
+      setIsApplyingBulkStatus(false)
+    }
+  }, [bulkStatus, labels.errors.bulkUpdate, loadRows, rows, runMutation, selectedIds, t])
 
   return (
     <Page>
@@ -249,6 +353,50 @@ export default function PurchasingRequestItemsPage() {
                   placeholder={labels.filters.referenceNumber}
                 />
               </div>
+            </div>
+          </section>
+
+          <section className="rounded-lg border bg-card p-4 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">{labels.filters.bulkStatus}</h2>
+                <p className="mt-1 text-sm text-muted-foreground">{labels.actions.selectedCount}</p>
+              </div>
+              {selectedIds.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedIds([])}
+                >
+                  {labels.actions.clearSelection}
+                </Button>
+              ) : null}
+            </div>
+            <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-end">
+              <div className="w-full max-w-sm space-y-2">
+                <label className="text-sm font-medium">{labels.filters.status}</label>
+                <select
+                  data-testid="purchasing-items-bulk-status"
+                  className="flex h-10 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={bulkStatus}
+                  onChange={(event) => setBulkStatus(event.target.value)}
+                >
+                  <option value="">{labels.actions.allStatuses}</option>
+                  {itemStatusViewValues.map((status) => (
+                    <option key={status} value={status}>
+                      {t(`purchasing.itemStatus.${status}`, status)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Button
+                type="button"
+                onClick={() => { void applyBulkStatus() }}
+                disabled={selectedIds.length === 0 || !bulkStatus || isApplyingBulkStatus}
+              >
+                {labels.actions.applyBulkStatus}
+              </Button>
             </div>
           </section>
 

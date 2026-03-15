@@ -2,6 +2,26 @@ import type { NotificationTypeDefinition } from '@open-mercato/shared/modules/no
 
 export const notificationTypes: NotificationTypeDefinition[] = [
   {
+    type: 'purchasing.request.created',
+    module: 'purchasing',
+    titleKey: 'purchasing.notifications.requestCreated.title',
+    bodyKey: 'purchasing.notifications.requestCreated.body',
+    icon: 'shopping-cart',
+    severity: 'info',
+    actions: [
+      {
+        id: 'view',
+        labelKey: 'common.view',
+        variant: 'outline',
+        href: '/backend/purchasing/requests/{sourceEntityId}',
+        icon: 'external-link',
+      },
+    ],
+    primaryActionId: 'view',
+    linkHref: '/backend/purchasing/requests/{sourceEntityId}',
+    expiresAfterHours: 168,
+  },
+  {
     type: 'purchasing.request_item.status_changed',
     module: 'purchasing',
     titleKey: 'purchasing.notifications.requestItemStatusChanged.title',
@@ -24,4 +44,3 @@ export const notificationTypes: NotificationTypeDefinition[] = [
 ]
 
 export default notificationTypes
-

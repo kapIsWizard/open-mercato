@@ -23,6 +23,7 @@ import {
   requireScope,
   recomputeRequestStatus,
   resolveScope,
+  serializePurchasingRequestSnapshot,
   softDeleteRequestChildren,
 } from './shared'
 import { normalizeRequestStatusForStorage } from '../lib/statuses'
@@ -80,6 +81,7 @@ const createRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRe
     })
     return request
   },
+  captureAfter: async (_input, result) => serializePurchasingRequestSnapshot(result),
   buildLog: async ({ result }) => {
     const { translate } = await resolveTranslations()
     return {
@@ -88,12 +90,22 @@ const createRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRe
       resourceId: result.id,
       tenantId: result.tenantId ?? null,
       organizationId: result.organizationId ?? null,
+      snapshotAfter: serializePurchasingRequestSnapshot(result),
     }
   },
 }
 
 const updateRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRequest> = {
   id: 'purchasing.requests.update',
+  async prepare(rawInput, ctx) {
+    const scope = requireScope(ctx)
+    const parsed = purchasingRequestUpdateSchema.parse(applyScopedInput(rawInput, scope))
+    const em = (ctx.container.resolve('em') as EntityManager)
+    const request = await requireRequestInScope(em, scope, parsed.id)
+    return {
+      before: serializePurchasingRequestSnapshot(request),
+    }
+  },
   async execute(rawInput, ctx) {
     const scope = requireScope(ctx)
     const parsed = purchasingRequestUpdateSchema.parse(applyScopedInput(rawInput, scope))
@@ -137,7 +149,8 @@ const updateRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRe
     })
     return request
   },
-  buildLog: async ({ result }) => {
+  captureAfter: async (_input, result) => serializePurchasingRequestSnapshot(result),
+  buildLog: async ({ result, snapshots }) => {
     const { translate } = await resolveTranslations()
     return {
       actionLabel: translate('purchasing.audit.requests.update', 'Update purchasing request'),
@@ -145,12 +158,23 @@ const updateRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRe
       resourceId: result.id,
       tenantId: result.tenantId ?? null,
       organizationId: result.organizationId ?? null,
+      snapshotBefore: snapshots.before ?? null,
+      snapshotAfter: snapshots.after ?? serializePurchasingRequestSnapshot(result),
     }
   },
 }
 
 const deleteRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRequest> = {
   id: 'purchasing.requests.delete',
+  async prepare(rawInput, ctx) {
+    const scope = requireScope(ctx)
+    const parsed = purchasingRequestDeleteSchema.parse(rawInput)
+    const em = (ctx.container.resolve('em') as EntityManager)
+    const request = await requireRequestInScope(em, scope, parsed.id)
+    return {
+      before: serializePurchasingRequestSnapshot(request),
+    }
+  },
   async execute(rawInput, ctx) {
     const scope = requireScope(ctx)
     const parsed = purchasingRequestDeleteSchema.parse(rawInput)
@@ -199,7 +223,7 @@ const deleteRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRe
     })
     return request
   },
-  buildLog: async ({ result }) => {
+  buildLog: async ({ result, snapshots }) => {
     const { translate } = await resolveTranslations()
     return {
       actionLabel: translate('purchasing.audit.requests.delete', 'Delete purchasing request'),
@@ -207,6 +231,7 @@ const deleteRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRe
       resourceId: result.id,
       tenantId: result.tenantId ?? null,
       organizationId: result.organizationId ?? null,
+      snapshotBefore: snapshots.before ?? null,
     }
   },
 }
