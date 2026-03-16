@@ -4,7 +4,6 @@ name: Preview Deploy
 #
 # Trigger conditions:
 #   - PR targets `develop`
-#   - PR is from the main repo (not a fork)
 #   - PR has the `preview-env` label
 #
 # Required GitHub secrets:
@@ -40,9 +39,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: |
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      contains(github.event.pull_request.labels.*.name, 'preview-env')
+    if: contains(github.event.pull_request.labels.*.name, 'preview-env')
 
     steps:
       - name: Checkout PR branch
