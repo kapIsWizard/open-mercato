@@ -4,7 +4,6 @@ name: Preview Deploy
 #
 # Trigger conditions:
 #   - PR targets `develop`
-#   - PR is from the main repo (not a fork)
 #   - PR has the `preview-env` label
 #
 # Required GitHub secrets:
@@ -40,9 +39,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: |
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      contains(github.event.pull_request.labels.*.name, 'preview-env')
+    if: contains(github.event.pull_request.labels.*.name, 'preview-env')
 
     steps:
       - name: Checkout PR branch
@@ -134,7 +131,6 @@ jobs:
           PREVIEW_HOSTNAME: ${{ steps.meta.outputs.preview_hostname }}
           JWT_SECRET: ${{ secrets.PREVIEW_JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.PREVIEW_POSTGRES_PASSWORD }}
-          ENCRYPTION_KEY: ${{ secrets.PREVIEW_ENCRYPTION_KEY }}
         run: |
           set -euo pipefail
 
@@ -148,8 +144,7 @@ jobs:
           APP_URL=https://${PREVIEW_HOSTNAME}
           JWT_SECRET=${JWT_SECRET}
           POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-          TENANT_DATA_ENCRYPTION=true
-          TENANT_DATA_ENCRYPTION_FALLBACK_KEY=${ENCRYPTION_KEY}
+          TENANT_DATA_ENCRYPTION=false
           MEILISEARCH_MASTER_KEY=meilisearch-preview-key
           ADMIN_EMAIL=admin@preview.local
           OM_INIT_SUPERADMIN_EMAIL=admin@preview.local
@@ -215,6 +210,12 @@ jobs:
                 --arg composeId "$COMPOSE_ID" \
                 '{host: $host, https: true, port: 3000, certificateType: "letsencrypt", composeId: $composeId, serviceName: "app", domainType: "compose"}')"
           fi
+
+          # Stop existing stack before redeploy to avoid container name conflicts
+          curl -s -X POST "${DOKPLOY_URL}/api/compose.stop" \
+            -H "x-api-key: ${DOKPLOY_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg composeId "$COMPOSE_ID" '{composeId: $composeId}')" || true
 
           # Trigger deploy
           curl -fsS -X POST "${DOKPLOY_URL}/api/compose.deploy" \
