@@ -1,4 +1,5 @@
 import type { MessageObjectTypeDefinition } from '@open-mercato/shared/modules/messages/types'
+import { importServerPreviewModule } from '@open-mercato/shared/lib/import/serverPreviewModule'
 import { MessageObjectDetail, MessageObjectPreview } from '@open-mercato/ui/backend/messages'
 
 const objectMessageTypes = ['default', 'messages.defaultWithObjects']
@@ -31,7 +32,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
           metadata: { id: entityId },
         }
       }
-      const { loadCurrencyPreview } = await import('./lib/messageObjectPreviews')
+      const { loadCurrencyPreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadCurrencyPreview(entityId, ctx)
     },
   },

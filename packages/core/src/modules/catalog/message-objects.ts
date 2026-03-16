@@ -1,4 +1,5 @@
 import type { MessageObjectTypeDefinition } from '@open-mercato/shared/modules/messages/types'
+import { importServerPreviewModule } from '@open-mercato/shared/lib/import/serverPreviewModule'
 import { MessageObjectDetail, MessageObjectPreview } from '@open-mercato/ui/backend/messages'
 
 const objectMessageTypes = ['default', 'messages.defaultWithObjects']
@@ -27,7 +28,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
       if (typeof window !== 'undefined') {
         return { title: 'Product', subtitle: entityId }
       }
-      const previews = await import('./lib/messageObjectPreviews')
+      const previews = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       const productLoader = (
         previews as typeof previews & {
           loadCatalogProductPreview?: (id: string, previewCtx: typeof ctx) => Promise<{ title: string; subtitle?: string }>
@@ -60,7 +61,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
       if (typeof window !== 'undefined') {
         return { title: 'Variant', subtitle: entityId }
       }
-      const previews = await import('./lib/messageObjectPreviews')
+      const previews = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       const variantLoader = (
         previews as typeof previews & {
           loadCatalogVariantPreview?: (id: string, previewCtx: typeof ctx) => Promise<{ title: string; subtitle?: string }>
@@ -93,7 +94,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
       if (typeof window !== 'undefined') {
         return { title: 'Category', subtitle: entityId }
       }
-      const { loadCatalogCategoryPreview } = await import('./lib/messageObjectPreviews')
+      const { loadCatalogCategoryPreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadCatalogCategoryPreview(entityId, ctx)
     },
   },

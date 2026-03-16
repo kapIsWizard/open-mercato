@@ -12,13 +12,6 @@ import {
   convertToSectionNavGroups,
 } from '@open-mercato/ui/backend/utils/nav'
 import type { AdminNavItem } from '@open-mercato/ui/backend/utils/nav'
-import { ProfileDropdown } from '@open-mercato/ui/backend/ProfileDropdown'
-import { IntegrationsButton } from '@open-mercato/ui/backend/IntegrationsButton'
-import { SettingsButton } from '@open-mercato/ui/backend/SettingsButton'
-import { MessagesIcon } from '@open-mercato/ui/backend/messages'
-import { GlobalSearchDialog } from '@open-mercato/search/modules/search/frontend'
-import OrganizationSwitcher from '@/components/OrganizationSwitcher'
-import { NotificationBellWrapper } from '@/components/NotificationBellWrapper'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { I18nProvider } from '@open-mercato/shared/lib/i18n/context'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
@@ -37,9 +30,9 @@ import { resolveFeatureCheckContext } from '@open-mercato/core/modules/directory
 import { profileSections, profilePathPrefixes } from '@open-mercato/core/modules/auth/lib/profile-sections'
 import { APP_VERSION } from '@open-mercato/shared/lib/version'
 import { PageInjectionBoundary } from '@open-mercato/ui/backend/injection/PageInjectionBoundary'
-import { AiAssistantIntegration, AiChatHeaderButton } from '@open-mercato/ai-assistant/frontend'
 import { CustomEntity } from '@open-mercato/core/modules/entities/data/entities'
 import { ComponentOverridesBootstrap } from '@/components/ComponentOverridesBootstrap'
+import { BackendMobileSidebarChrome, BackendRightHeader } from '@/components/BackendChrome'
 
 type NavItem = {
   href: string
@@ -355,23 +348,21 @@ export default async function BackendLayout({ children, params }: { children: Re
 
   const collapsedCookie = cookieStore.get('om_sidebar_collapsed')?.value
   const initialCollapsed = collapsedCookie === '1'
+  const isPurchasingRoute = path === '/backend/purchasing' || path.startsWith('/backend/purchasing/')
 
   const rightHeaderContent = (
-    <>
-      <AiChatHeaderButton />
-      <GlobalSearchDialog embeddingConfigured={embeddingConfigured} missingConfigMessage={missingConfigMessage} />
-      <div className="hidden lg:contents">
-        <OrganizationSwitcher />
-      </div>
-      {showIntegrationsButton ? <IntegrationsButton /> : null}
-      <SettingsButton />
-      <ProfileDropdown email={auth?.email} />
-      <NotificationBellWrapper />
-      <MessagesIcon />
-    </>
+    <BackendRightHeader
+      email={auth?.email ?? null}
+      showIntegrationsButton={showIntegrationsButton}
+      tenantId={auth?.tenantId ?? null}
+      organizationId={auth?.orgId ?? null}
+      embeddingConfigured={embeddingConfigured}
+      missingConfigMessage={missingConfigMessage}
+      lean={isPurchasingRoute}
+    />
   )
 
-  const mobileSidebarContent = <OrganizationSwitcher compact />
+  const mobileSidebarContent = <BackendMobileSidebarChrome lean={isPurchasingRoute} />
 
   const deployEnv = process.env.DEPLOY_ENV
   const baseProductName = translate('appShell.productName', 'Open Mercato')
@@ -390,34 +381,29 @@ export default async function BackendLayout({ children, params }: { children: Re
       <Script async src="https://w.appzi.io/w.js?token=TtIV6" strategy="afterInteractive" />
       <I18nProvider locale={locale} dict={dict}>
         <ComponentOverridesBootstrap>
-          <AiAssistantIntegration
-            tenantId={auth?.tenantId ?? null}
-            organizationId={auth?.orgId ?? null}
+          <AppShell
+            key={path}
+            productName={productName}
+            email={auth?.email}
+            groups={groups}
+            currentTitle={currentTitle}
+            breadcrumb={breadcrumb}
+            sidebarCollapsedDefault={initialCollapsed}
+            rightHeaderSlot={rightHeaderContent}
+            mobileSidebarSlot={mobileSidebarContent}
+            adminNavApi="/api/auth/admin/nav"
+            version={APP_VERSION}
+            settingsPathPrefixes={settingsPathPrefixes}
+            settingsSections={filteredSettingsSections}
+            settingsSectionTitle={translate('backend.nav.settings', 'Settings')}
+            profileSections={profileSections}
+            profileSectionTitle={translate('profile.page.title', 'Profile')}
+            profilePathPrefixes={profilePathPrefixes}
           >
-            <AppShell
-              key={path}
-              productName={productName}
-              email={auth?.email}
-              groups={groups}
-              currentTitle={currentTitle}
-              breadcrumb={breadcrumb}
-              sidebarCollapsedDefault={initialCollapsed}
-              rightHeaderSlot={rightHeaderContent}
-              mobileSidebarSlot={mobileSidebarContent}
-              adminNavApi="/api/auth/admin/nav"
-              version={APP_VERSION}
-              settingsPathPrefixes={settingsPathPrefixes}
-              settingsSections={filteredSettingsSections}
-              settingsSectionTitle={translate('backend.nav.settings', 'Settings')}
-              profileSections={profileSections}
-              profileSectionTitle={translate('profile.page.title', 'Profile')}
-              profilePathPrefixes={profilePathPrefixes}
-            >
-              <PageInjectionBoundary path={path} context={injectionContext}>
-                {children}
-              </PageInjectionBoundary>
-            </AppShell>
-          </AiAssistantIntegration>
+            <PageInjectionBoundary path={path} context={injectionContext}>
+              {children}
+            </PageInjectionBoundary>
+          </AppShell>
         </ComponentOverridesBootstrap>
       </I18nProvider>
     </>

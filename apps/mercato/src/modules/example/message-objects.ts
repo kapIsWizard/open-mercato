@@ -1,4 +1,5 @@
 import type { MessageObjectTypeDefinition } from '@open-mercato/shared/modules/messages/types'
+import { importServerPreviewModule } from '@open-mercato/shared/lib/import/serverPreviewModule'
 import { MessageObjectDetail, MessageObjectPreview } from '@open-mercato/ui/backend/messages'
 
 const objectMessageTypes = ['default', 'messages.defaultWithObjects']
@@ -26,7 +27,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
       if (typeof window !== 'undefined') {
         return { title: 'Todo', subtitle: entityId }
       }
-      const { loadTodoPreview } = await import('./lib/messageObjectPreviews')
+      const { loadTodoPreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadTodoPreview(entityId, ctx)
     },
   },

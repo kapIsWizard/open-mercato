@@ -1,6 +1,14 @@
 import type { ActionLog } from '@open-mercato/core/modules/audit_logs/data/entities'
 import { normalizeItemStatusForView, normalizeRequestStatusForView } from './statuses'
 
+type PurchasingHistoryLabels = {
+  systemActor: string
+  requestLabel: string
+  requestItemLabel: string
+  commentLabel: string
+  actionsByCommandId: Record<string, string>
+}
+
 export type PurchasingHistoryEntry = {
   id: string
   occurredAt: string
@@ -31,7 +39,10 @@ function readItemStatus(snapshot: unknown): string | null {
   return null
 }
 
-function readTargetLabel(log: ActionLog): { targetType: 'request' | 'item' | 'comment'; targetLabel: string | null } {
+function readTargetLabel(
+  log: ActionLog,
+  labels: PurchasingHistoryLabels,
+): { targetType: 'request' | 'item' | 'comment'; targetLabel: string | null } {
   if (log.resourceKind === 'purchasing.request_item') {
     const after = log.snapshotAfter as Record<string, unknown> | null
     const before = log.snapshotBefore as Record<string, unknown> | null
@@ -51,7 +62,7 @@ function readTargetLabel(log: ActionLog): { targetType: 'request' | 'item' | 'co
   }
   return {
     targetType: 'request',
-    targetLabel: 'Request',
+    targetLabel: labels.requestLabel,
   }
 }
 
@@ -74,19 +85,32 @@ function detectStatusChange(log: ActionLog): { statusFrom: string | null; status
 export function normalizeActionLogToPurchasingHistoryEntry(
   log: ActionLog,
   displayUsers?: Record<string, string>,
+  labels?: PurchasingHistoryLabels,
 ): PurchasingHistoryEntry {
+  const resolvedLabels: PurchasingHistoryLabels = labels ?? {
+    systemActor: 'system',
+    requestLabel: 'Request',
+    requestItemLabel: 'Request item',
+    commentLabel: 'Comment',
+    actionsByCommandId: {},
+  }
   const actorLabel = log.actorUserId
     ? (displayUsers?.[log.actorUserId] ?? log.actorUserId)
-    : 'system'
+    : resolvedLabels.systemActor
   const statusChange = detectStatusChange(log)
-  const target = readTargetLabel(log)
+  const target = readTargetLabel(log, resolvedLabels)
+  const translatedAction =
+    (log.commandId ? resolvedLabels.actionsByCommandId[log.commandId] : null)
+    ?? log.actionLabel
+    ?? log.commandId
+    ?? null
 
   if (statusChange) {
     return {
       id: log.id,
       occurredAt: log.createdAt.toISOString(),
       kind: 'status',
-      action: target.targetLabel ?? (target.targetType === 'item' ? 'Request item' : 'Request'),
+      action: target.targetLabel ?? (target.targetType === 'item' ? resolvedLabels.requestItemLabel : resolvedLabels.requestLabel),
       actor: { id: log.actorUserId, label: actorLabel },
       source: 'action_log',
       metadata: {
@@ -102,12 +126,11 @@ export function normalizeActionLogToPurchasingHistoryEntry(
   if (log.resourceKind === 'purchasing.comment') {
     const after = log.snapshotAfter as Record<string, unknown> | null
     const before = log.snapshotBefore as Record<string, unknown> | null
-    const body =
+      const body =
       (typeof after?.body === 'string' ? after.body : null)
       ?? (typeof before?.body === 'string' ? before.body : null)
-      ?? log.actionLabel
-      ?? log.commandId
-      ?? 'Comment'
+      ?? translatedAction
+      ?? resolvedLabels.commentLabel
     return {
       id: log.id,
       occurredAt: log.createdAt.toISOString(),
@@ -126,7 +149,7 @@ export function normalizeActionLogToPurchasingHistoryEntry(
     id: log.id,
     occurredAt: log.createdAt.toISOString(),
     kind: 'action',
-    action: log.actionLabel ?? log.commandId,
+    action: translatedAction ?? resolvedLabels.requestLabel,
     actor: { id: log.actorUserId, label: actorLabel },
     source: 'action_log',
     metadata: {
@@ -140,8 +163,9 @@ export function normalizeActionLogToPurchasingHistoryEntry(
 export function buildPurchasingHistoryEntries(input: {
   actionLogs: ActionLog[]
   displayUsers?: Record<string, string>
+  labels?: PurchasingHistoryLabels
 }): PurchasingHistoryEntry[] {
   return input.actionLogs
-    .map((entry) => normalizeActionLogToPurchasingHistoryEntry(entry, input.displayUsers))
+    .map((entry) => normalizeActionLogToPurchasingHistoryEntry(entry, input.displayUsers, input.labels))
     .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
 }

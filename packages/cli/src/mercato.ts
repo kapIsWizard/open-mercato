@@ -985,8 +985,8 @@ export async function run(argv = process.argv) {
           const nodeModulesBase = resolver.isMonorepo() ? resolver.getRootDir() : appDir
 
           const processes: ChildProcess[] = []
-          const autoSpawnWorkers = process.env.AUTO_SPAWN_WORKERS !== 'false'
-          const autoSpawnScheduler = process.env.AUTO_SPAWN_SCHEDULER !== 'false'
+          const autoSpawnWorkers = process.env.AUTO_SPAWN_WORKERS === 'true'
+          const autoSpawnScheduler = process.env.AUTO_SPAWN_SCHEDULER === 'true'
           const queueStrategy = process.env.QUEUE_STRATEGY || 'local'
 
           function cleanup() {
@@ -1008,7 +1008,7 @@ export async function run(argv = process.argv) {
           const mercatoBin = path.join(nodeModulesBase, 'node_modules/@open-mercato/cli/bin/mercato')
 
           // Start Next.js dev
-          const nextProcess = spawn('node', [nextBin, 'dev', '--turbopack'], {
+          const nextProcess = spawn('node', [nextBin, 'dev', '--webpack'], {
             stdio: 'inherit',
             env: process.env,
             cwd: appDir,

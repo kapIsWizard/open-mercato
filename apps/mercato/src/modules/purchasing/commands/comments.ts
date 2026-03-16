@@ -33,6 +33,15 @@ function serializePurchasingCommentSnapshot(comment: PurchasingComment) {
   }
 }
 
+function canMutateComment(comment: PurchasingComment, ctx: { auth?: { sub?: string | null; roles?: string[] | null } | null }) {
+  const currentUserId = typeof ctx.auth?.sub === 'string' ? ctx.auth.sub : null
+  const roleNames = Array.isArray(ctx.auth?.roles)
+    ? ctx.auth.roles.filter((role): role is string => typeof role === 'string' && role.trim().length > 0)
+    : []
+  if (roleNames.includes('admin') || roleNames.includes('superadmin')) return true
+  return Boolean(currentUserId && comment.authorUserId && comment.authorUserId === currentUserId)
+}
+
 const commentCrudEvents: CrudEventsConfig<PurchasingComment> = {
   module: 'purchasing',
   entity: 'comment',
@@ -116,6 +125,7 @@ const updateCommentCommand: CommandHandler<Record<string, unknown>, PurchasingCo
       deletedAt: null,
     } as FilterQuery<PurchasingComment>)
     if (!comment) throw new CrudHttpError(404, { error: 'Purchasing comment not found' })
+    if (!canMutateComment(comment, ctx)) throw new CrudHttpError(403, { error: 'You can only edit your own comments' })
     return {
       before: serializePurchasingCommentSnapshot(comment),
     }
@@ -139,6 +149,7 @@ const updateCommentCommand: CommandHandler<Record<string, unknown>, PurchasingCo
       },
     })
     if (!comment) throw new CrudHttpError(404, { error: 'Purchasing comment not found' })
+    if (!canMutateComment(comment, ctx)) throw new CrudHttpError(403, { error: 'You can only edit your own comments' })
     await emitCrudSideEffects({
       dataEngine,
       action: 'updated',
@@ -183,6 +194,7 @@ const deleteCommentCommand: CommandHandler<Record<string, unknown>, PurchasingCo
       deletedAt: null,
     } as FilterQuery<PurchasingComment>)
     if (!comment) throw new CrudHttpError(404, { error: 'Purchasing comment not found' })
+    if (!canMutateComment(comment, ctx)) throw new CrudHttpError(403, { error: 'You can only edit your own comments' })
     return {
       before: serializePurchasingCommentSnapshot(comment),
     }
@@ -198,6 +210,7 @@ const deleteCommentCommand: CommandHandler<Record<string, unknown>, PurchasingCo
       deletedAt: null,
     } as FilterQuery<PurchasingComment>)
     if (!comment) throw new CrudHttpError(404, { error: 'Purchasing comment not found' })
+    if (!canMutateComment(comment, ctx)) throw new CrudHttpError(403, { error: 'You can only edit your own comments' })
     await deleteScopedAttachments(em, scope, E.purchasing.purchasing_comment, [comment.id])
     comment.deletedAt = new Date()
     comment.updatedAt = new Date()

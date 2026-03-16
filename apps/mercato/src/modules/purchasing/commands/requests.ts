@@ -74,8 +74,9 @@ const createRequestCommand: CommandHandler<Record<string, unknown>, PurchasingRe
         attachmentsCount: 0,
       },
     })
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
     for (const [index, item] of parsed.items.entries()) {
-      await createRequestItemRecord(dataEngine, scope, request.id, index + 1, item)
+      await createRequestItemRecord(dataEngine, em, scope, request.id, index + 1, item)
     }
     await emitCrudSideEffects({
       dataEngine,

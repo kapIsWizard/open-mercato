@@ -34,6 +34,7 @@ import {
 } from '../../../../lib/requestFormUtils'
 
 type DraftItem = {
+  clientId: string
   catalogProductId: string | null
   catalogQuery: string
   sku: string
@@ -70,6 +71,11 @@ function createTemporaryAttachmentRecordId(): string {
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   return `purchasing-request-draft:${randomPart}`
+}
+
+function createDraftItemId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `draft-item-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 export default function PurchasingRequestCreatePage() {
@@ -283,6 +289,7 @@ export default function PurchasingRequestCreatePage() {
       }
       return [
         {
+          clientId: createDraftItemId(),
           catalogProductId: product.id,
           catalogQuery: product.title,
           sku: product.sku ?? '',
@@ -302,14 +309,36 @@ export default function PurchasingRequestCreatePage() {
     })
   }, [])
 
-  const removeDraftItemByProductId = React.useCallback((catalogProductId: string) => {
+  const addManualItem = React.useCallback(() => {
+    setItems((current) => [
+      {
+        clientId: createDraftItemId(),
+        catalogProductId: null,
+        catalogQuery: '',
+        sku: '',
+        unit: '',
+        referenceNumber: '',
+        productName: '',
+        quantity: '1',
+        purchasingNote: '',
+        supplier: null,
+        group: null,
+        purchasingAvailability: null,
+        availableQuantity: null,
+        unitPriceNet: null,
+      },
+      ...current,
+    ])
+  }, [])
+
+  const removeDraftItem = React.useCallback((clientId: string) => {
     setItems((current) => {
-      const indexToRemove = current.findIndex((item) => item.catalogProductId === catalogProductId)
+      const indexToRemove = current.findIndex((item) => item.clientId === clientId)
       if (indexToRemove < 0) return current
       return current.filter((_, index) => index !== indexToRemove)
     })
     setFieldErrors((current) => {
-      const indexToRemove = items.findIndex((item) => item.catalogProductId === catalogProductId)
+      const indexToRemove = items.findIndex((item) => item.clientId === clientId)
       if (indexToRemove < 0) return current
       const next: PurchasingFormErrors = {}
       for (const [key, value] of Object.entries(current)) {
@@ -328,9 +357,12 @@ export default function PurchasingRequestCreatePage() {
     })
   }, [items])
 
-  const updateDraftItemByProductId = React.useCallback((catalogProductId: string, patch: Partial<Pick<DraftItem, 'quantity' | 'purchasingNote'>>) => {
+  const updateDraftItem = React.useCallback((
+    clientId: string,
+    patch: Partial<Pick<DraftItem, 'quantity' | 'purchasingNote' | 'productName' | 'sku' | 'referenceNumber'>>,
+  ) => {
     setItems((current) => {
-      const existingIndex = current.findIndex((item) => item.catalogProductId === catalogProductId)
+      const existingIndex = current.findIndex((item) => item.clientId === clientId)
       if (existingIndex < 0) return current
       return current.map((entry, entryIndex) => (
         entryIndex === existingIndex
@@ -339,11 +371,14 @@ export default function PurchasingRequestCreatePage() {
       ))
     })
     setFieldErrors((current) => {
-      const itemIndex = items.findIndex((item) => item.catalogProductId === catalogProductId)
+      const itemIndex = items.findIndex((item) => item.clientId === clientId)
       if (itemIndex < 0) return current
       let next = current
       if (patch.quantity !== undefined) {
         next = clearFieldError(next, `items.${itemIndex}.quantity`)
+      }
+      if (patch.productName !== undefined) {
+        next = clearFieldError(next, `items.${itemIndex}.productName`)
       }
       return next
     })
@@ -501,35 +536,37 @@ export default function PurchasingRequestCreatePage() {
               </div>
             </div>
             <p className="text-sm text-muted-foreground">
-                  {t('purchasing.validation.itemsRequiredHint', 'Each request needs at least one item with a product name and quantity.')}
+              {t('purchasing.validation.itemsRequiredHint', 'Each request needs at least one item with a product name and quantity.')}
             </p>
             <FieldError message={fieldErrors.items} />
-            <div className="rounded-md border bg-muted/10 p-3">
-              <CatalogProductLookup
-                rowId="create"
-                selectedRows={items
-                  .filter((item): item is DraftItem & { catalogProductId: string } => typeof item.catalogProductId === 'string' && item.catalogProductId.length > 0)
-                  .map((item) => ({
-                    id: item.catalogProductId,
-                    sku: item.sku || null,
-                    title: item.productName || item.catalogQuery,
-                    unit: item.unit || null,
-                    referenceNumber: item.referenceNumber || null,
-                    supplier: item.supplier,
-                    group: item.group,
-                    purchasingAvailability: item.purchasingAvailability,
-                    availableQuantity: item.availableQuantity,
-                    unitPriceNet: item.unitPriceNet,
-                    quantity: item.quantity,
-                    purchasingNote: item.purchasingNote,
-                  }))}
-                onPick={addCatalogProductToItems}
-                onRemove={removeDraftItemByProductId}
-                onQuantityChange={(productId, quantity) => updateDraftItemByProductId(productId, { quantity })}
-                onNoteChange={(productId, purchasingNote) => updateDraftItemByProductId(productId, { purchasingNote })}
-                disabled={isSaving}
-              />
-            </div>
+            <CatalogProductLookup
+              rowId="create"
+              selectedRows={items.map((item) => ({
+                id: item.clientId,
+                catalogProductId: item.catalogProductId,
+                sku: item.sku || null,
+                title: item.productName || item.catalogQuery,
+                unit: item.unit || null,
+                referenceNumber: item.referenceNumber || null,
+                supplier: item.supplier,
+                group: item.group,
+                purchasingAvailability: item.purchasingAvailability,
+                availableQuantity: item.availableQuantity,
+                unitPriceNet: item.unitPriceNet,
+                quantity: item.quantity,
+                purchasingNote: item.purchasingNote,
+                isManual: item.catalogProductId == null,
+              }))}
+              onPick={addCatalogProductToItems}
+              onAddManual={addManualItem}
+              onRemove={removeDraftItem}
+              onQuantityChange={(itemId, quantity) => updateDraftItem(itemId, { quantity })}
+              onNoteChange={(itemId, purchasingNote) => updateDraftItem(itemId, { purchasingNote })}
+              onTitleChange={(itemId, productName) => updateDraftItem(itemId, { productName })}
+              onSkuChange={(itemId, sku) => updateDraftItem(itemId, { sku })}
+              onReferenceNumberChange={(itemId, referenceNumber) => updateDraftItem(itemId, { referenceNumber })}
+              disabled={isSaving}
+            />
           </section>
 
           <div className="flex items-center justify-end gap-3">

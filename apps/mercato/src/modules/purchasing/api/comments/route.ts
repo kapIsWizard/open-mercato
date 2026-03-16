@@ -3,6 +3,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import { E } from '@/.mercato/generated/entities.ids.generated'
 import { User } from '@open-mercato/core/modules/auth/data/entities'
+import { Attachment } from '@open-mercato/core/modules/attachments/data/entities'
 import { PurchasingComment } from '../../data/entities'
 import {
   purchasingCommentCreateSchema,
@@ -112,6 +113,14 @@ const crud = makeCrudRoute({
       if (!authorIds.length) return
       const em = ctx.container.resolve('em') as EntityManager
       const users = await em.find(User, { id: { $in: authorIds as string[] } })
+      const commentIds = items
+        .map((item: unknown) => {
+          if (!item || typeof item !== 'object') return null
+          const record = item as Record<string, unknown>
+          if (typeof record.id === 'string' && record.id.trim().length > 0) return record.id
+          return null
+        })
+        .filter((value: string | null): value is string => Boolean(value))
       const userMap = new Map(
         users.map((user) => [
           user.id,
@@ -121,6 +130,32 @@ const crud = makeCrudRoute({
           },
         ]),
       )
+      const attachments = commentIds.length > 0
+        ? await em.find(Attachment, {
+            entityId: E.purchasing.purchasing_comment,
+            recordId: { $in: commentIds },
+            tenantId: ctx.auth?.tenantId ?? null,
+            organizationId: ctx.auth?.orgId ?? null,
+          })
+        : []
+      const attachmentsByCommentId = new Map<string, Array<{
+        id: string
+        fileName: string
+        mimeType: string | null
+        url: string
+        createdAt: string
+      }>>()
+      for (const attachment of attachments) {
+        const current = attachmentsByCommentId.get(attachment.recordId) ?? []
+        current.push({
+          id: attachment.id,
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType ?? null,
+          url: attachment.url,
+          createdAt: attachment.createdAt.toISOString(),
+        })
+        attachmentsByCommentId.set(attachment.recordId, current)
+      }
       items.forEach((item: unknown) => {
         if (!item || typeof item !== 'object') return
         const record = item as Record<string, unknown>
@@ -136,6 +171,9 @@ const crud = makeCrudRoute({
         record.author_email = author?.email ?? null
         record.authorName = author?.name ?? null
         record.authorEmail = author?.email ?? null
+        const commentId = typeof record.id === 'string' ? record.id : null
+        const commentAttachments = commentId ? attachmentsByCommentId.get(commentId) ?? [] : []
+        record.attachments = commentAttachments
       })
     },
   },
@@ -177,6 +215,13 @@ const commentListItemSchema = z.object({
   author_email: z.string().nullable().optional(),
   created_at: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),
+  attachments: z.array(z.object({
+    id: z.string().uuid(),
+    fileName: z.string(),
+    mimeType: z.string().nullable().optional(),
+    url: z.string(),
+    createdAt: z.string(),
+  })).optional(),
 }).passthrough()
 
 export const openApi = createPurchasingCrudOpenApi({

@@ -10,7 +10,7 @@ import { Badge } from '@open-mercato/ui/primitives/badge'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Boxes, ClipboardList, PackageSearch, UserRoundX } from 'lucide-react'
-import { apiCall, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { cn } from '@open-mercato/shared/lib/utils'
@@ -44,10 +44,6 @@ type RequestsResponse = {
 type AssigneeOption = {
   value: string
   label: string
-}
-
-type FeatureCheckResponse = {
-  userId?: string
 }
 
 export default function PurchasingRequestsPage() {
@@ -192,17 +188,10 @@ export default function PurchasingRequestsPage() {
     let cancelled = false
     async function loadLookupData() {
       try {
-        const [payload, featureCheck] = await Promise.all([
-          readApiResultOrThrow<{ items?: AssigneeOption[] }>('/api/purchasing/assignees'),
-          apiCall<FeatureCheckResponse>('/api/auth/feature-check', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ features: [] }),
-          }),
-        ])
+        const payload = await readApiResultOrThrow<{ items?: AssigneeOption[] }>('/api/purchasing/assignees')
         if (!cancelled) {
           setAssignees(Array.isArray(payload.items) ? payload.items : [])
-          setCurrentUserId(typeof featureCheck.result?.userId === 'string' ? featureCheck.result.userId : null)
+          setCurrentUserId(null)
         }
       } catch {
         if (!cancelled) {
@@ -281,7 +270,7 @@ export default function PurchasingRequestsPage() {
                 />
               </section>
 
-              <div className="rounded-lg border bg-card p-2 shadow-sm">
+              <div className="min-w-0">
                 <DataTable<RequestRow>
                   title={labels.title}
                   data={rows}

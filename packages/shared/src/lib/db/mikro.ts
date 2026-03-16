@@ -4,25 +4,55 @@ import { MikroORM } from '@mikro-orm/core'
 import { PostgreSqlDriver } from '@mikro-orm/postgresql'
 import { getSslConfig } from './ssl'
 
-let ormInstance: MikroORM<PostgreSqlDriver> | null = null
+const ORM_INSTANCE_KEY = '__openMercatoOrmInstance__'
+const ORM_INIT_PROMISE_KEY = '__openMercatoOrmInitPromise__'
+const ORM_ENTITIES_KEY = '__openMercatoOrmEntities__'
 const DEV_DB_POOL_MAX = 6
 const DEV_DB_POOL_MIN = 0
 
-// Registration pattern for publishable packages
-let _entities: any[] | null = null
+type OrmGlobalState = typeof globalThis & {
+  [ORM_INSTANCE_KEY]?: MikroORM<PostgreSqlDriver> | null
+  [ORM_INIT_PROMISE_KEY]?: Promise<MikroORM<PostgreSqlDriver>> | null
+  [ORM_ENTITIES_KEY]?: any[] | null
+}
+
+function readGlobalOrmInstance(): MikroORM<PostgreSqlDriver> | null {
+  return ((globalThis as OrmGlobalState)[ORM_INSTANCE_KEY] ?? null)
+}
+
+function writeGlobalOrmInstance(instance: MikroORM<PostgreSqlDriver> | null) {
+  ;(globalThis as OrmGlobalState)[ORM_INSTANCE_KEY] = instance
+}
+
+function readGlobalOrmInitPromise(): Promise<MikroORM<PostgreSqlDriver>> | null {
+  return ((globalThis as OrmGlobalState)[ORM_INIT_PROMISE_KEY] ?? null)
+}
+
+function writeGlobalOrmInitPromise(promise: Promise<MikroORM<PostgreSqlDriver>> | null) {
+  ;(globalThis as OrmGlobalState)[ORM_INIT_PROMISE_KEY] = promise
+}
+
+function readGlobalOrmEntities(): any[] | null {
+  return ((globalThis as OrmGlobalState)[ORM_ENTITIES_KEY] ?? null)
+}
+
+function writeGlobalOrmEntities(entities: any[] | null) {
+  ;(globalThis as OrmGlobalState)[ORM_ENTITIES_KEY] = entities
+}
 
 export function registerOrmEntities(entities: any[]) {
-  if (_entities !== null && process.env.NODE_ENV === 'development') {
+  if (readGlobalOrmEntities() !== null && process.env.NODE_ENV === 'development') {
     console.debug('[Bootstrap] ORM entities re-registered (this may occur during HMR)')
   }
-  _entities = entities
+  writeGlobalOrmEntities(entities)
 }
 
 export function getOrmEntities(): any[] {
-  if (!_entities) {
+  const entities = readGlobalOrmEntities()
+  if (!entities) {
     throw new Error('[Bootstrap] ORM entities not registered. Call registerOrmEntities() at bootstrap.')
   }
-  return _entities
+  return entities
 }
 
 function parsePositiveInt(rawValue: string | undefined, fallback: number): number {
@@ -53,8 +83,13 @@ export function resolveDbPoolConfig(env: NodeJS.ProcessEnv) {
 }
 
 export async function getOrm() {
-  if (ormInstance) {
-    return ormInstance
+  const cachedInstance = readGlobalOrmInstance()
+  if (cachedInstance) {
+    return cachedInstance
+  }
+  const pendingInit = readGlobalOrmInitPromise()
+  if (pendingInit) {
+    return pendingInit
   }
   const entities = getOrmEntities()
   const clientUrl = process.env.DATABASE_URL
@@ -85,31 +120,23 @@ export async function getOrm() {
 
   const sslConfig = getSslConfig()
 
-  ormInstance = await MikroORM.init<PostgreSqlDriver>({
+  const nextInitPromise = MikroORM.init<PostgreSqlDriver>({
     driver: PostgreSqlDriver,
     clientUrl,
     entities,
     debug: false,
-    // Connection pooling configuration
     pool: {
       min: poolMin,
       max: poolMax,
       idleTimeoutMillis: poolIdleTimeout,
       acquireTimeoutMillis: poolAcquireTimeout,
-      // Close idle connections after 30 seconds
       destroyTimeoutMillis: process.env.NODE_ENV === 'production' ? 30000 : 3000,
     },
-    // Connection options
     driverOptions: {
-      // Enable connection pooling
       connection: {
-        // Maximum number of connections in the pool
         max: poolMax,
-        // Minimum number of connections in the pool
         min: poolMin,
-        // Close connections after this many milliseconds of inactivity
         idleTimeoutMillis: poolIdleTimeout,
-        // Maximum time to wait for a connection from the pool
         acquireTimeoutMillis: poolAcquireTimeout,
         idle_in_transaction_session_timeout: idleInTransactionTimeoutMs,
         options: connectionOptions,
@@ -117,18 +144,12 @@ export async function getOrm() {
       },
     },
   })
-  return ormInstance
-}
-
-
-async function closeOrmIfLoaded(): Promise<void> {
-  if (ormInstance) {
-    await ormInstance.close(true)
-    ormInstance = null
+  writeGlobalOrmInitPromise(nextInitPromise)
+  try {
+    const instance = await nextInitPromise
+    writeGlobalOrmInstance(instance)
+    return instance
+  } finally {
+    writeGlobalOrmInitPromise(null)
   }
-}
-
-// In dev mode, handle reloads cleanly without leaving dangling connections.
-if (process.env.NODE_ENV !== 'production') {
-  void closeOrmIfLoaded()
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
@@ -12,8 +13,8 @@ export type CatalogScope = {
 }
 
 export type ImportedCatalogProductMetadata = {
-  source: 'client_csv'
-  sourceFileName: string
+  source: 'client_csv' | 'purchasing_manual'
+  sourceFileName: string | null
   symbol: string
   referenceNumber: string | null
   supplier: string | null
@@ -244,6 +245,24 @@ function buildProductHandle(symbol: string): string {
     .slice(0, 150)
 }
 
+async function buildUniqueProductHandle(
+  em: EntityManager,
+  scope: CatalogScope,
+  base: string,
+): Promise<string> {
+  const normalizedBase = buildProductHandle(base) || `product-${Date.now()}`
+  const existing = await em.findOne(CatalogProduct, {
+    tenantId: scope.tenantId,
+    organizationId: scope.organizationId,
+    handle: normalizedBase,
+    deletedAt: null,
+  })
+  if (!existing) return normalizedBase
+  const suffix = randomUUID().slice(0, 8)
+  const trimmedBase = normalizedBase.slice(0, Math.max(1, 150 - suffix.length - 1))
+  return `${trimmedBase}-${suffix}`
+}
+
 function metadataMatchesSearch(metadata: ImportedCatalogProductMetadata, search: string): boolean {
   const haystack = [
     metadata.referenceNumber,
@@ -264,12 +283,16 @@ export function extractImportedCatalogMetadata(metadata: unknown): ImportedCatal
   const imported = (metadata as { purchasingImport?: unknown }).purchasingImport
   if (!imported || typeof imported !== 'object') return null
   const candidate = imported as Partial<ImportedCatalogProductMetadata>
-  if (candidate.source !== 'client_csv' || typeof candidate.symbol !== 'string' || candidate.symbol.length === 0) {
+  if (
+    (candidate.source !== 'client_csv' && candidate.source !== 'purchasing_manual')
+    || typeof candidate.symbol !== 'string'
+    || candidate.symbol.length === 0
+  ) {
     return null
   }
   return {
-    source: 'client_csv',
-    sourceFileName: typeof candidate.sourceFileName === 'string' ? candidate.sourceFileName : 'client-products.csv',
+    source: candidate.source,
+    sourceFileName: typeof candidate.sourceFileName === 'string' ? candidate.sourceFileName : null,
     symbol: candidate.symbol,
     referenceNumber: typeof candidate.referenceNumber === 'string' ? candidate.referenceNumber : null,
     supplier: typeof candidate.supplier === 'string' ? candidate.supplier : null,
@@ -436,6 +459,70 @@ export async function importClientProductsIntoCatalog(
   }
   await em.flush()
   return { created, updated }
+}
+
+export async function createManualPurchasingCatalogProduct(
+  em: EntityManager,
+  scope: CatalogScope,
+  input: {
+    productName: string
+    sku?: string | null
+    referenceNumber?: string | null
+  },
+): Promise<CatalogProduct> {
+  await seedCatalogUnits(em, scope)
+  const sku = normalizeText(input.sku)
+  const referenceNumber = normalizeText(input.referenceNumber)
+  if (sku) {
+    const existing = await em.findOne(CatalogProduct, {
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      sku,
+      deletedAt: null,
+    })
+    if (existing) return existing
+  }
+
+  const symbol = sku ?? `MANUAL-${Date.now()}`
+  const metadata: ImportedCatalogProductMetadata = {
+    source: 'purchasing_manual',
+    sourceFileName: null,
+    symbol,
+    referenceNumber,
+    supplier: null,
+    group: null,
+    purchasingAvailability: null,
+    owner: null,
+    barcode: null,
+    warehouseLocation: null,
+    packageSize: null,
+    stockQuantity: null,
+    availableQuantity: null,
+    reservedQuantity: null,
+    unitPriceNet: null,
+    unitPriceGross: null,
+    vatRate: null,
+  }
+  const product = em.create(CatalogProduct, {
+    tenantId: scope.tenantId,
+    organizationId: scope.organizationId,
+    title: input.productName.trim(),
+    description: referenceNumber ?? input.productName.trim(),
+    sku,
+    handle: await buildUniqueProductHandle(em, scope, sku ?? input.productName),
+    defaultUnit: 'pc',
+    defaultSalesUnit: 'pc',
+    primaryCurrencyCode: 'PLN',
+    productType: 'simple',
+    metadata: { purchasingImport: metadata },
+    isConfigurable: false,
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  })
+  em.persist(product)
+  await em.flush()
+  return product
 }
 
 async function upsertCatalogRegularPrice(

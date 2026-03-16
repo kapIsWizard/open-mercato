@@ -1,4 +1,5 @@
 import type { MessageObjectTypeDefinition } from '@open-mercato/shared/modules/messages/types'
+import { importServerPreviewModule } from '@open-mercato/shared/lib/import/serverPreviewModule'
 import { MessageObjectDetail, MessageObjectPreview } from '@open-mercato/ui/backend/messages'
 import { LeaveRequestDetail } from './components/LeaveRequestDetail'
 import { LeaveRequestPreview } from './components/LeaveRequestPreview'
@@ -46,7 +47,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
           subtitle: entityId,
         }
       }
-      const { loadLeaveRequestPreview } = await import('./lib/messageObjectPreviews')
+      const { loadLeaveRequestPreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadLeaveRequestPreview(entityId, ctx)
     },
   },
@@ -78,7 +79,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
           subtitle: entityId,
         }
       }
-      const { loadTeamPreview } = await import('./lib/messageObjectPreviews')
+      const { loadTeamPreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadTeamPreview(entityId, ctx)
     },
   },
@@ -110,7 +111,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
           subtitle: entityId,
         }
       }
-      const { loadTeamMemberPreview } = await import('./lib/messageObjectPreviews')
+      const { loadTeamMemberPreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadTeamMemberPreview(entityId, ctx)
     },
   },
@@ -137,7 +138,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
       if (typeof window !== 'undefined') {
         return { title: 'Team role', subtitle: entityId }
       }
-      const { loadStaffTeamRolePreview } = await import('./lib/messageObjectPreviews')
+      const { loadStaffTeamRolePreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadStaffTeamRolePreview(entityId, ctx)
     },
   },
@@ -164,7 +165,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
       if (typeof window !== 'undefined') {
         return { title: 'My availability', subtitle: entityId }
       }
-      const { loadStaffAvailabilityPreview } = await import('./lib/messageObjectPreviews')
+      const { loadStaffAvailabilityPreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadStaffAvailabilityPreview(entityId, ctx)
     },
   },

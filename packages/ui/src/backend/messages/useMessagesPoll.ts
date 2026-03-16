@@ -44,6 +44,7 @@ export function useMessagesPoll(): UseMessagesPollResult {
 
   const lastMessageIdRef = React.useRef<string | null>(null)
   const pulseTimeoutRef = React.useRef<number | null>(null)
+  const inFlightRef = React.useRef(false)
 
   const fetchMessages = React.useCallback(async () => {
     try {
@@ -86,13 +87,34 @@ export function useMessagesPoll(): UseMessagesPollResult {
   }, [])
 
   React.useEffect(() => {
-    void fetchMessages()
-    const interval = window.setInterval(() => {
-      void fetchMessages()
-    }, POLL_INTERVAL)
+    let active = true
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+
+    const run = async () => {
+      if (!active) return
+      if (document.hidden || inFlightRef.current) {
+        timeoutId = setTimeout(run, POLL_INTERVAL)
+        return
+      }
+
+      inFlightRef.current = true
+      try {
+        await fetchMessages()
+      } finally {
+        inFlightRef.current = false
+        if (active) {
+          timeoutId = setTimeout(run, POLL_INTERVAL)
+        }
+      }
+    }
+
+    void run()
 
     return () => {
-      window.clearInterval(interval)
+      active = false
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+      }
       if (pulseTimeoutRef.current) {
         window.clearTimeout(pulseTimeoutRef.current)
       }

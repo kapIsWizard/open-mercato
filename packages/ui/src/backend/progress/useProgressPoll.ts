@@ -42,6 +42,7 @@ export function useProgressPoll(): UseProgressPollResult {
   const [recentlyCompleted, setRecentlyCompleted] = React.useState<ProgressJobDto[]>([])
   const [isLoading, setIsLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
+  const inFlightRef = React.useRef(false)
 
   const fetchJobs = React.useCallback(async () => {
     try {
@@ -65,24 +66,40 @@ export function useProgressPoll(): UseProgressPollResult {
   }, [fetchJobs])
 
   React.useEffect(() => {
-    fetchJobs()
-    let interval: ReturnType<typeof setInterval> | null = setInterval(fetchJobs, POLL_INTERVAL)
+    let active = true
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
 
-    const onVisibilityChange = () => {
-      if (document.hidden) {
-        if (interval) {
-          clearInterval(interval)
-          interval = null
+    const run = async () => {
+      if (!active) return
+      if (document.hidden || inFlightRef.current) {
+        timeoutId = setTimeout(run, POLL_INTERVAL)
+        return
+      }
+
+      inFlightRef.current = true
+      try {
+        await fetchJobs()
+      } finally {
+        inFlightRef.current = false
+        if (active) {
+          timeoutId = setTimeout(run, POLL_INTERVAL)
         }
-      } else {
-        fetchJobs()
-        interval = setInterval(fetchJobs, POLL_INTERVAL)
       }
     }
 
+    const onVisibilityChange = () => {
+      if (!document.hidden && !inFlightRef.current) {
+        void fetchJobs()
+      }
+    }
+
+    void run()
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
-      if (interval) clearInterval(interval)
+      active = false
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+      }
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [fetchJobs])

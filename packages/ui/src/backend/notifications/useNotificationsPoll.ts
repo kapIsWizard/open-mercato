@@ -38,6 +38,7 @@ export function useNotificationsPoll(): UseNotificationsPollResult {
   const grantedFeaturesRef = React.useRef<string[]>([])
   const lastIdRef = React.useRef<string | null>(null)
   const prevUnreadRef = React.useRef(0)
+  const inFlightRef = React.useRef(false)
   const {
     markAsRead,
     executeAction,
@@ -140,9 +141,35 @@ export function useNotificationsPoll(): UseNotificationsPollResult {
   }, [])
 
   React.useEffect(() => {
-    fetchNotifications()
-    const interval = setInterval(fetchNotifications, POLL_INTERVAL)
-    return () => clearInterval(interval)
+    let active = true
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+
+    const run = async () => {
+      if (!active) return
+      if (document.hidden || inFlightRef.current) {
+        timeoutId = setTimeout(run, POLL_INTERVAL)
+        return
+      }
+
+      inFlightRef.current = true
+      try {
+        await fetchNotifications()
+      } finally {
+        inFlightRef.current = false
+        if (active) {
+          timeoutId = setTimeout(run, POLL_INTERVAL)
+        }
+      }
+    }
+
+    void run()
+
+    return () => {
+      active = false
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+      }
+    }
   }, [fetchNotifications])
 
   React.useEffect(() => {

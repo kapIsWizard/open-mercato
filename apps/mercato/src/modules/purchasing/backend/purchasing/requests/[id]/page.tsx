@@ -83,6 +83,13 @@ type CommentRecord = {
   authorName: string | null
   authorEmail: string | null
   createdAt: string | null
+  attachments: Array<{
+    id: string
+    fileName: string
+    mimeType: string | null
+    url: string
+    createdAt: string | null
+  }>
 }
 
 type HistoryRecord = {
@@ -112,6 +119,7 @@ type FeatureCheckResponse = {
   ok?: boolean
   granted?: string[]
   roles?: string[]
+  userId?: string
 }
 
 type PurchasingPermissions = {
@@ -127,6 +135,13 @@ type PurchasingPermissions = {
 type DetailTabId = 'items' | 'comments' | 'attachments' | 'history'
 type ItemSaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 
+function createTemporaryCommentAttachmentRecordId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `purchasing-comment-draft:${crypto.randomUUID()}`
+  }
+  return `purchasing-comment-draft:${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export default function PurchasingRequestDetailPage({ params }: { params?: { id?: string } }) {
   const id = params?.id ?? null
   const t = useT()
@@ -141,6 +156,9 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
   const [history, setHistory] = React.useState<HistoryRecord[]>([])
   const [historyLoading, setHistoryLoading] = React.useState(false)
   const [commentBody, setCommentBody] = React.useState('')
+  const [commentDraftAttachmentRecordId] = React.useState(() => createTemporaryCommentAttachmentRecordId())
+  const [editingCommentId, setEditingCommentId] = React.useState<string | null>(null)
+  const [editingCommentBody, setEditingCommentBody] = React.useState('')
   const [activeTab, setActiveTab] = React.useState<DetailTabId>('items')
   const [isLoading, setIsLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
@@ -160,6 +178,8 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
   const [bulkQuantity, setBulkQuantity] = React.useState('')
   const [bulkSupplierOrderNumber, setBulkSupplierOrderNumber] = React.useState('')
   const [bulkPurchasingNote, setBulkPurchasingNote] = React.useState('')
+  const [currentUserId, setCurrentUserId] = React.useState<string | null>(null)
+  const [roleNames, setRoleNames] = React.useState<string[]>([])
   const [permissions, setPermissions] = React.useState<PurchasingPermissions>({
     canUpdateRequests: false,
     canViewItems: false,
@@ -194,13 +214,15 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
         readApiResultOrThrow<{ items?: Array<Record<string, unknown>> }>(`/api/purchasing/comments?requestId=${encodeURIComponent(id)}&page=1&pageSize=100`),
       ])
       const granted = Array.isArray(featureCall.result?.granted) ? featureCall.result.granted : []
-      const roleNames = Array.isArray(featureCall.result?.roles) ? featureCall.result.roles : []
+      const nextRoleNames = Array.isArray(featureCall.result?.roles) ? featureCall.result.roles : []
+      setRoleNames(nextRoleNames)
+      setCurrentUserId(typeof featureCall.result?.userId === 'string' ? featureCall.result.userId : null)
       const nextPermissions = {
-        canUpdateRequests: canManagePurchasingRequest(roleNames),
-        canViewItems: canAccessPurchasingModule(roleNames),
-        canOpenOperationalItems: canViewPurchasingOperationalItems(roleNames),
-        canManageItems: canManagePurchasingItems(roleNames),
-        canManageComments: canManagePurchasingComments(roleNames),
+        canUpdateRequests: canManagePurchasingRequest(nextRoleNames),
+        canViewItems: canAccessPurchasingModule(nextRoleNames),
+        canOpenOperationalItems: canViewPurchasingOperationalItems(nextRoleNames),
+        canManageItems: canManagePurchasingItems(nextRoleNames),
+        canManageComments: canManagePurchasingComments(nextRoleNames),
         canViewAttachments:
           featureCall.result?.ok === true
           || granted.includes('attachments.view')
@@ -244,6 +266,8 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
       setItemFieldErrors({})
       setCommentFieldErrors({})
       setCommentFormError(null)
+      setEditingCommentId(null)
+      setEditingCommentBody('')
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : t('purchasing.requests.errors.load', 'Failed to load purchasing request.')
       setError(message)
@@ -253,6 +277,8 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
       setHistory([])
       itemSavedSnapshotRef.current = {}
       setItemSaveStates({})
+      setCurrentUserId(null)
+      setRoleNames([])
       setPermissions({
         canUpdateRequests: false,
         canViewItems: false,
@@ -521,6 +547,18 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
     })
   }, [permissions.canManageItems, selectedItemIds])
 
+  const loadAttachmentIds = React.useCallback(async (recordId: string): Promise<string[]> => {
+    const call = await apiCall<{ items?: Array<{ id?: string | null }> }>(
+      `/api/attachments?entityId=${encodeURIComponent(E.purchasing.purchasing_comment)}&recordId=${encodeURIComponent(recordId)}`,
+      undefined,
+      { fallback: { items: [] } },
+    )
+    if (!call.ok || !Array.isArray(call.result?.items)) return []
+    return call.result.items
+      .map((item) => (typeof item.id === 'string' ? item.id : null))
+      .filter((value): value is string => Boolean(value))
+  }, [])
+
   const addComment = React.useCallback(async () => {
     if (!id) return
     const validation = validateCommentForm(commentBody, t)
@@ -532,7 +570,7 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
     try {
       setCommentFieldErrors({})
       setCommentFormError(null)
-      await runMutation({
+      const result = await runMutation({
         operation: () => readApiResultOrThrow<{ id?: string }>(
           '/api/purchasing/comments',
           {
@@ -547,6 +585,31 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
         context: { resourceType: 'purchasing.request', resourceId: id },
         mutationPayload: { requestId: id, body: commentBody.trim() },
       })
+      if (permissions.canViewAttachments && typeof result?.id === 'string' && result.id.length > 0) {
+        const attachmentIds = await loadAttachmentIds(commentDraftAttachmentRecordId)
+        if (attachmentIds.length > 0) {
+          const transfer = await apiCall<{ ok?: boolean; error?: string }>(
+            '/api/attachments/transfer',
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                entityId: E.purchasing.purchasing_comment,
+                attachmentIds,
+                fromRecordId: commentDraftAttachmentRecordId,
+                toRecordId: result.id,
+              }),
+            },
+            { fallback: null },
+          )
+          if (!transfer.ok) {
+            flash(
+              transfer.result?.error ?? t('purchasing.comments.errors.transfer', 'Comment was created, but attachment transfer failed.'),
+              'warning',
+            )
+          }
+        }
+      }
       setCommentBody('')
       flash(t('purchasing.comments.flash.created', 'Comment added.'), 'success')
       await load()
@@ -560,7 +623,61 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
       const message = normalized.message
       flash(message, 'error')
     }
-  }, [commentBody, id, load, runMutation, t])
+  }, [commentBody, commentDraftAttachmentRecordId, id, load, loadAttachmentIds, permissions.canViewAttachments, runMutation, t])
+
+  const startEditingComment = React.useCallback((comment: CommentRecord) => {
+    setEditingCommentId(comment.id)
+    setEditingCommentBody(comment.body)
+    setCommentFieldErrors({})
+    setCommentFormError(null)
+  }, [])
+
+  const cancelEditingComment = React.useCallback(() => {
+    setEditingCommentId(null)
+    setEditingCommentBody('')
+    setCommentFieldErrors({})
+    setCommentFormError(null)
+  }, [])
+
+  const saveCommentEdit = React.useCallback(async () => {
+    if (!editingCommentId) return
+    const validation = validateCommentForm(editingCommentBody, t)
+    if (Object.keys(validation.fieldErrors).length > 0) {
+      setCommentFieldErrors(validation.fieldErrors)
+      setCommentFormError(validation.message ?? t('purchasing.validation.fixHighlightedFields', 'Check the highlighted fields and try again.'))
+      return
+    }
+    try {
+      setCommentFieldErrors({})
+      setCommentFormError(null)
+      await runMutation({
+        operation: () => readApiResultOrThrow<{ ok: boolean }>(
+          '/api/purchasing/comments',
+          {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              id: editingCommentId,
+              body: editingCommentBody.trim(),
+            }),
+          },
+        ),
+        context: { resourceType: 'purchasing.comment', resourceId: editingCommentId },
+        mutationPayload: { id: editingCommentId, body: editingCommentBody.trim() },
+      })
+      flash(t('purchasing.comments.flash.updated', 'Comment saved.'), 'success')
+      cancelEditingComment()
+      await load()
+    } catch (saveError) {
+      const normalized = resolvePurchasingFormError(
+        saveError,
+        t('purchasing.comments.errors.update', 'Failed to save comment.'),
+      )
+      setCommentFieldErrors(normalized.fieldErrors)
+      setCommentFormError(normalized.message)
+      flash(normalized.message, 'error')
+    }
+  }, [cancelEditingComment, editingCommentBody, editingCommentId, load, runMutation, t])
 
   const tabs = React.useMemo(
     () => [
@@ -571,6 +688,12 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
     ],
     [t],
   )
+
+  const canEditComment = React.useCallback((comment: CommentRecord) => {
+    if (!permissions.canManageComments || !currentUserId) return false
+    if (comment.authorUserId === currentUserId) return true
+    return roleNames.includes('admin') || roleNames.includes('superadmin')
+  }, [currentUserId, permissions.canManageComments, roleNames])
 
   if (isLoading) {
     return (
@@ -1149,18 +1272,77 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                         </div>
                         <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{formatDateLabel(comment.createdAt)}</div>
                       </div>
+                      {canEditComment(comment) ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => startEditingComment(comment)}
+                        >
+                          {t('purchasing.comments.actions.edit', 'Edit comment')}
+                        </Button>
+                      ) : null}
                     </div>
-                    <p className="whitespace-pre-wrap text-sm">{comment.body}</p>
-                    {permissions.canViewAttachments ? (
-                      <AttachmentsSection
-                        entityId={E.purchasing.purchasing_comment}
-                        recordId={comment.id}
-                        title={t('purchasing.attachments.comment.title', 'Comment attachments')}
-                        description={t('purchasing.attachments.comment.description', 'Attach supplier offers, screenshots, or supporting files directly to this comment.')}
-                        showHeader={false}
-                        onChanged={() => { void load() }}
-                      />
-                    ) : null}
+                    {editingCommentId === comment.id ? (
+                      <div className="space-y-3">
+                        <Textarea
+                          data-testid={`purchasing-detail-comment-edit-body-${comment.id}`}
+                          value={editingCommentBody}
+                          onChange={(event) => {
+                            setEditingCommentBody(event.target.value)
+                            setCommentFieldErrors((current) => clearFieldError(current, 'body'))
+                          }}
+                          rows={4}
+                          aria-invalid={commentFieldErrors.body ? 'true' : 'false'}
+                          className={cn(commentFieldErrors.body ? 'border-destructive focus-visible:ring-destructive/30' : null)}
+                        />
+                        <FieldError message={commentFieldErrors.body} />
+                        {permissions.canViewAttachments ? (
+                          <AttachmentsSection
+                            entityId={E.purchasing.purchasing_comment}
+                            recordId={comment.id}
+                            title={t('purchasing.comments.attachments.title', 'Comment attachments')}
+                            description={t('purchasing.comments.attachments.description', 'Add a supplier offer, screenshot, or supporting file together with this comment.')}
+                            showHeader={false}
+                            onChanged={() => { void load() }}
+                          />
+                        ) : null}
+                        <div className="flex justify-end gap-2">
+                          <Button type="button" variant="outline" onClick={cancelEditingComment}>
+                            {t('purchasing.comments.actions.cancelEdit', 'Cancel editing')}
+                          </Button>
+                          <Button type="button" onClick={() => { void saveCommentEdit() }}>
+                            {t('purchasing.comments.actions.saveEdit', 'Save comment')}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <p className="whitespace-pre-wrap text-sm">{comment.body}</p>
+                        {comment.attachments.length > 0 ? (
+                          <div className="space-y-2">
+                            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                              {t('purchasing.comments.attachments.listTitle', 'Attachments')}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {comment.attachments.map((attachment) => (
+                                <a
+                                  key={attachment.id}
+                                  href={attachment.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  download
+                                  className="inline-flex max-w-full items-center rounded-md border px-3 py-1.5 text-sm text-primary underline-offset-4 hover:underline"
+                                  title={attachment.fileName}
+                                >
+                                  <span className="truncate">{attachment.fileName}</span>
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1183,6 +1365,15 @@ export default function PurchasingRequestDetailPage({ params }: { params?: { id?
                     />
                     <FieldError message={commentFieldErrors.body} />
                   </div>
+                  {permissions.canViewAttachments ? (
+                    <AttachmentsSection
+                      entityId={E.purchasing.purchasing_comment}
+                      recordId={commentDraftAttachmentRecordId}
+                      title={t('purchasing.comments.attachments.title', 'Comment attachments')}
+                      description={t('purchasing.comments.attachments.description', 'Add a supplier offer, screenshot, or supporting file together with this comment.')}
+                      showHeader={false}
+                    />
+                  ) : null}
                   <div className="flex justify-end">
                     <Button data-testid="purchasing-detail-add-comment" type="button" onClick={() => { void addComment() }}>
                       {t('purchasing.comments.actions.add', 'Add comment')}
@@ -1319,6 +1510,18 @@ function mapCommentRecord(item: Record<string, unknown>): CommentRecord {
           ? item.author_email
           : null,
     createdAt: typeof item.createdAt === 'string' ? item.createdAt : typeof item.created_at === 'string' ? item.created_at : null,
+    attachments: Array.isArray(item.attachments)
+      ? item.attachments
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+        .map((entry) => ({
+          id: typeof entry.id === 'string' ? entry.id : '',
+          fileName: typeof entry.fileName === 'string' ? entry.fileName : '',
+          mimeType: typeof entry.mimeType === 'string' ? entry.mimeType : null,
+          url: typeof entry.url === 'string' ? entry.url : '',
+          createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : null,
+        }))
+        .filter((entry) => entry.id.length > 0 && entry.fileName.length > 0 && entry.url.length > 0)
+      : [],
   }
 }
 

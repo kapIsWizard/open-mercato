@@ -687,3 +687,4 @@ Integration coverage MUST include:
 
 - 2026-03-14: Created second-iteration purchasing spec aligned to native Open Mercato catalog, companies, notifications, attachments, tabbed detail view, and activity history.
 - 2026-03-15: Implemented role split for `sales` / `bok` / `purchasing`, purchasing-specific post-login redirect, and role-aware integration coverage via `TC-PUR-002` (UI), `TC-PUR-003` (API workflow), and `TC-PUR-006` (API notifications).
+- 2026-03-16: Manual request items now auto-create native Open Mercato catalog products and persist `catalogProductId` on purchasing request items; API coverage extended in `TC-PUR-003`.

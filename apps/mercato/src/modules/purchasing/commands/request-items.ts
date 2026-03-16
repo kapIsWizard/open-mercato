@@ -53,7 +53,7 @@ const createItemCommand: CommandHandler<Record<string, unknown>, PurchasingReque
       deletedAt: null,
     }) + 1
     const dataEngine = ctx.container.resolve('dataEngine') as DataEngine
-    const item = await createRequestItemRecord(dataEngine, scope, parsed.requestId, lineNo, parsed)
+    const item = await createRequestItemRecord(dataEngine, em, scope, parsed.requestId, lineNo, parsed)
     await recomputeRequestStatus(em, request)
     await em.flush()
     await emitCrudSideEffects({

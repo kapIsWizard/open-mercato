@@ -204,17 +204,21 @@ export async function GET(req: NextRequest) {
       isSuperAdmin: effectiveIsSuperAdmin,
     }
 
-    await logCrudAccess({
-      container,
-      auth,
-      request: req,
-      items: response.items,
-      idField: 'id',
-      resourceKind: 'directory.organization_switcher',
-      organizationId: response.selectedId,
-      tenantId,
-      query: Object.fromEntries(url.searchParams.entries()),
-    })
+    try {
+      await logCrudAccess({
+        container,
+        auth,
+        request: req,
+        items: response.items,
+        idField: 'id',
+        resourceKind: 'directory.organization_switcher',
+        organizationId: response.selectedId,
+        tenantId,
+        query: Object.fromEntries(url.searchParams.entries()),
+      })
+    } catch (logError) {
+      console.warn('Failed to audit organization switcher access', logError)
+    }
 
     return NextResponse.json(response)
   } catch (err) {

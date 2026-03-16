@@ -7,6 +7,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { PurchasingRequest } from '../../data/entities'
 import { buildPurchasingHistoryEntries } from '../../lib/requestHistory'
 import { guardPurchasingAccess } from '../../lib/apiAccess'
@@ -63,11 +64,29 @@ export async function GET(req: Request) {
       tenantIds: [],
       organizationIds: [],
     })
+    const { translate } = await resolveTranslations()
 
     return NextResponse.json({
       items: buildPurchasingHistoryEntries({
         actionLogs: logs,
         displayUsers: displayMaps.users,
+        labels: {
+          systemActor: translate('purchasing.history.actor.system', 'system'),
+          requestLabel: translate('purchasing.history.target.request', 'Request'),
+          requestItemLabel: translate('purchasing.history.target.item', 'Request item'),
+          commentLabel: translate('purchasing.history.target.comment', 'Comment'),
+          actionsByCommandId: {
+            'purchasing.requests.create': translate('purchasing.audit.requests.create', 'Create purchasing request'),
+            'purchasing.requests.update': translate('purchasing.audit.requests.update', 'Update purchasing request'),
+            'purchasing.requests.delete': translate('purchasing.audit.requests.delete', 'Delete purchasing request'),
+            'purchasing.request-items.create': translate('purchasing.audit.items.create', 'Create purchasing request item'),
+            'purchasing.request-items.update': translate('purchasing.audit.items.update', 'Update purchasing request item'),
+            'purchasing.request-items.delete': translate('purchasing.audit.items.delete', 'Delete purchasing request item'),
+            'purchasing.comments.create': translate('purchasing.audit.comments.create', 'Create purchasing comment'),
+            'purchasing.comments.update': translate('purchasing.audit.comments.update', 'Update purchasing comment'),
+            'purchasing.comments.delete': translate('purchasing.audit.comments.delete', 'Delete purchasing comment'),
+          },
+        },
       }),
     })
   } catch (error) {

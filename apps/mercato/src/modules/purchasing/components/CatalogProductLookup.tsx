@@ -4,6 +4,7 @@ import * as React from 'react'
 import { CheckCircle2, CirclePlus } from 'lucide-react'
 import { Badge } from '@open-mercato/ui/primitives/badge'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -23,8 +24,10 @@ export type CatalogProductLookupRow = {
 }
 
 export type CatalogProductLookupSelection = CatalogProductLookupRow & {
+  catalogProductId: string | null
   quantity: string
   purchasingNote: string
+  isManual?: boolean
 }
 
 type LookupResponse = {
@@ -42,9 +45,13 @@ type CatalogProductLookupProps = {
   selectedRows?: CatalogProductLookupSelection[]
   onQueryChange?: (value: string) => void
   onPick: (product: CatalogProductLookupRow, quantity: number) => void
-  onRemove?: (productId: string) => void
-  onQuantityChange?: (productId: string, quantity: string) => void
-  onNoteChange?: (productId: string, note: string) => void
+  onAddManual?: () => void
+  onRemove?: (selectedRowId: string) => void
+  onQuantityChange?: (selectedRowId: string, quantity: string) => void
+  onNoteChange?: (selectedRowId: string, note: string) => void
+  onTitleChange?: (selectedRowId: string, title: string) => void
+  onSkuChange?: (selectedRowId: string, sku: string) => void
+  onReferenceNumberChange?: (selectedRowId: string, referenceNumber: string) => void
   disabled?: boolean
 }
 
@@ -56,9 +63,13 @@ export function CatalogProductLookup({
   selectedRows = [],
   onQueryChange,
   onPick,
+  onAddManual,
   onRemove,
   onQuantityChange,
   onNoteChange,
+  onTitleChange,
+  onSkuChange,
+  onReferenceNumberChange,
   disabled = false,
 }: CatalogProductLookupProps) {
   const t = useT()
@@ -141,15 +152,22 @@ export function CatalogProductLookup({
     }
   }, [availability, group, loadProducts, searchValue, supplier])
 
-  const selectedById = React.useMemo(() => new Map(selectedRows.map((row) => [row.id, row])), [selectedRows])
+  const selectedCatalogProductIds = React.useMemo(
+    () => new Set(
+      selectedRows
+        .map((row) => row.catalogProductId)
+        .filter((value): value is string => typeof value === 'string' && value.length > 0),
+    ),
+    [selectedRows],
+  )
   const searchRows = React.useMemo(
-    () => results.filter((product) => !selectedById.has(product.id)),
-    [results, selectedById],
+    () => results.filter((product) => !selectedCatalogProductIds.has(product.id)),
+    [results, selectedCatalogProductIds],
   )
   const hasActiveSearch = searchValue.trim().length >= 2 || Boolean(supplier || group || availability)
 
   return (
-    <div className="space-y-4 rounded-lg border bg-muted/20 p-3">
+    <div className="space-y-4">
       <div className="space-y-3">
         <Input
           data-testid={`purchasing-catalog-lookup-query-${rowId}`}
@@ -216,9 +234,23 @@ export function CatalogProductLookup({
         <p className="text-sm text-muted-foreground">
           {t('purchasing.products.lookup.helper', 'Search the product catalog, pick rows, and keep selected products below.')}
         </p>
-        {isLoading ? (
-          <p className="text-xs text-muted-foreground">{t('purchasing.products.lookup.loading', 'Searching catalog...')}</p>
-        ) : null}
+        <div className="flex items-center gap-3">
+          {isLoading ? (
+            <p className="text-xs text-muted-foreground">{t('purchasing.products.lookup.loading', 'Searching catalog...')}</p>
+          ) : null}
+          {onAddManual ? (
+            <Button
+              data-testid={`purchasing-catalog-lookup-add-manual-${rowId}`}
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onAddManual}
+              disabled={disabled}
+            >
+              {t('purchasing.products.lookup.addManual', 'Add off-catalog item')}
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <div className="space-y-2">
@@ -302,9 +334,10 @@ export function CatalogProductLookup({
                       </div>
                     </td>
                     <td className="px-3 py-3 align-middle text-right">
-                      <button
+                      <IconButton
                         type="button"
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:text-foreground"
+                        variant="outline"
+                        size="sm"
                         onClick={(event) => {
                           event.stopPropagation()
                           if (disabled) return
@@ -313,7 +346,7 @@ export function CatalogProductLookup({
                         aria-label={t('purchasing.products.lookup.addWithQuantity', 'Add product')}
                       >
                         <CirclePlus className="h-4 w-4" />
-                      </button>
+                      </IconButton>
                     </td>
                   </tr>
                 )
@@ -351,11 +384,50 @@ export function CatalogProductLookup({
             <tbody>
               {selectedRows.map((product) => (
                 <tr key={product.id} className="border-t bg-primary/5">
-                  <td className="px-3 py-3 align-middle">{product.sku ?? '—'}</td>
                   <td className="px-3 py-3 align-middle">
-                    <div className="line-clamp-3 min-w-0 font-medium leading-5">{product.title}</div>
+                    {product.isManual ? (
+                      <Input
+                        data-testid={`purchasing-selected-sku-${rowId}-${product.id}`}
+                        value={product.sku ?? ''}
+                        onChange={(event) => onSkuChange?.(product.id, event.target.value)}
+                        disabled={disabled}
+                        placeholder={t('purchasing.items.fields.sku', 'SKU')}
+                      />
+                    ) : (
+                      product.sku ?? '—'
+                    )}
                   </td>
-                  <td className="px-3 py-3 align-middle">{product.referenceNumber ?? '—'}</td>
+                  <td className="px-3 py-3 align-middle">
+                    <div className="space-y-2">
+                      {product.isManual ? (
+                        <Input
+                          data-testid={`purchasing-selected-title-${rowId}-${product.id}`}
+                          value={product.title}
+                          onChange={(event) => onTitleChange?.(product.id, event.target.value)}
+                          disabled={disabled}
+                          placeholder={t('purchasing.items.fields.productName', 'Product name')}
+                        />
+                      ) : (
+                        <div className="line-clamp-3 min-w-0 font-medium leading-5">{product.title}</div>
+                      )}
+                      {product.isManual ? (
+                        <Badge variant="outline">{t('purchasing.products.lookup.manualBadge', 'Off catalog')}</Badge>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td className="px-3 py-3 align-middle">
+                    {product.isManual ? (
+                      <Input
+                        data-testid={`purchasing-selected-reference-${rowId}-${product.id}`}
+                        value={product.referenceNumber ?? ''}
+                        onChange={(event) => onReferenceNumberChange?.(product.id, event.target.value)}
+                        disabled={disabled}
+                        placeholder={t('purchasing.items.fields.referenceNumber', 'Reference number')}
+                      />
+                    ) : (
+                      product.referenceNumber ?? '—'
+                    )}
+                  </td>
                   <td className="px-3 py-3 align-middle">{product.supplier ?? '—'}</td>
                   <td className="px-3 py-3 align-middle">{product.group ?? '—'}</td>
                   <td className="px-3 py-3 align-middle">
@@ -387,14 +459,15 @@ export function CatalogProductLookup({
                     />
                   </td>
                   <td className="px-3 py-3 align-middle text-right">
-                    <button
+                    <IconButton
                       type="button"
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-600 transition-colors"
+                      variant="outline"
+                      size="sm"
                       onClick={() => onRemove?.(product.id)}
                       aria-label={t('purchasing.products.lookup.remove', 'Remove')}
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                    </button>
+                    </IconButton>
                   </td>
                 </tr>
               ))}

@@ -11,6 +11,7 @@ import { deletePartitionFile } from '@open-mercato/core/modules/attachments/lib/
 import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { normalizePolishTaxId } from '@open-mercato/shared/lib/pl/nip'
 import { PurchasingRequest, PurchasingRequestItem } from '../data/entities'
+import { createManualPurchasingCatalogProduct } from '../lib/catalogProducts'
 import {
   deriveRequestStatusFromItems,
   normalizeItemStatusForStorage,
@@ -385,6 +386,7 @@ export async function softDeleteRequestChildren(em: EntityManager, requestId: st
 
 export async function createRequestItemRecord(
   dataEngine: DataEngine,
+  em: EntityManager,
   scope: Scope,
   requestId: string,
   lineNo: number,
@@ -400,6 +402,18 @@ export async function createRequestItemRecord(
     purchasingNote?: string | null
   },
 ): Promise<PurchasingRequestItem> {
+  let catalogProductId = input.catalogProductId ?? null
+  if (!catalogProductId) {
+    const manualProduct = await createManualPurchasingCatalogProduct(em, {
+      tenantId: String(scope.tenantId),
+      organizationId: String(scope.organizationId),
+    }, {
+      productName: input.productName,
+      sku: input.sku ?? null,
+      referenceNumber: input.referenceNumber ?? null,
+    })
+    catalogProductId = manualProduct.id
+  }
   return await dataEngine.createOrmEntity({
     entity: PurchasingRequestItem,
     data: {
@@ -407,7 +421,7 @@ export async function createRequestItemRecord(
       organizationId: scope.organizationId,
       requestId,
       lineNo,
-      catalogProductId: input.catalogProductId ?? null,
+      catalogProductId,
       sku: input.sku ?? null,
       referenceNumber: input.referenceNumber ?? null,
       productName: input.productName,

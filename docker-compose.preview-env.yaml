@@ -19,10 +19,16 @@ services:
   app:
     image: ${PREVIEW_IMAGE}
     user: "0"
-    # Always fresh init — preview envs are ephemeral, no init_marker needed
-    command: >
-      sh -c "yarn mercato init && yarn start"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /tmp/init-marker/.seeded ]; then
+          yarn mercato init && mkdir -p /tmp/init-marker && touch /tmp/init-marker/.seeded
+        else
+          yarn db:migrate
+        fi && yarn start
     volumes:
+      - init_marker:/tmp/init-marker
       - attachments_storage:/app/apps/mercato/storage
     working_dir: /app/apps/mercato
     environment:
@@ -111,6 +117,8 @@ services:
       - mercato-network
 
 volumes:
+  init_marker:
+    name: mercato-init-marker-${DEPLOY_ENV}
   postgres_data:
     name: mercato-postgres-data-${DEPLOY_ENV}
   redis_data:

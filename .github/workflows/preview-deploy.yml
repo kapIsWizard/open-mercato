@@ -198,6 +198,21 @@ jobs:
               --arg composeFile "$COMPOSE_FILE" \
               '{composeId: $composeId, env: $env, composeFile: $composeFile, sourceType: "raw"}')"
 
+          # Register preview domain with Dokploy so Traefik config is auto-generated
+          EXISTING_DOMAIN=$(curl -fsS "${DOKPLOY_URL}/api/domain.all?composeId=${COMPOSE_ID}" \
+            -H "x-api-key: ${DOKPLOY_API_KEY}" | jq -r '.[] | select(.host=="'"${PREVIEW_HOSTNAME}"'") | .domainId' 2>/dev/null || echo "")
+
+          if [[ -z "$EXISTING_DOMAIN" ]]; then
+            echo "Registering domain: ${PREVIEW_HOSTNAME}"
+            curl -fsS -X POST "${DOKPLOY_URL}/api/domain.create" \
+              -H "x-api-key: ${DOKPLOY_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg host "$PREVIEW_HOSTNAME" \
+                --arg composeId "$COMPOSE_ID" \
+                '{host: $host, https: true, port: 3000, certificateType: "letsencrypt", composeId: $composeId, serviceName: "app", domainType: "compose"}')"
+          fi
+
           # Trigger deploy
           curl -fsS -X POST "${DOKPLOY_URL}/api/compose.deploy" \
             -H "x-api-key: ${DOKPLOY_API_KEY}" \

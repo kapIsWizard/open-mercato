@@ -1,4 +1,5 @@
 import type { MessageObjectTypeDefinition } from '@open-mercato/shared/modules/messages/types'
+import { importServerPreviewModule } from '@open-mercato/shared/lib/import/serverPreviewModule'
 import { MessageObjectDetail, MessageObjectPreview } from '@open-mercato/ui/backend/messages'
 import { SalesDocumentMessageDetail } from './widgets/messages/SalesDocumentMessageDetail'
 import { SalesDocumentMessagePreview } from './widgets/messages/SalesDocumentMessagePreview'
@@ -32,7 +33,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
           subtitle: entityId,
         }
       }
-      const { loadSalesOrderPreview } = await import('./lib/messageObjectPreviews')
+      const { loadSalesOrderPreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadSalesOrderPreview(entityId, ctx)
     },
   },
@@ -62,7 +63,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
           subtitle: entityId,
         }
       }
-      const { loadSalesQuotePreview } = await import('./lib/messageObjectPreviews')
+      const { loadSalesQuotePreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadSalesQuotePreview(entityId, ctx)
     },
   },
@@ -89,7 +90,7 @@ export const messageObjectTypes: MessageObjectTypeDefinition[] = [
       if (typeof window !== 'undefined') {
         return { title: 'Sales channel', subtitle: entityId }
       }
-      const { loadSalesChannelPreview } = await import('./lib/messageObjectPreviews')
+      const { loadSalesChannelPreview } = await importServerPreviewModule<typeof import('./lib/messageObjectPreviews')>('./lib/messageObjectPreviews')
       return loadSalesChannelPreview(entityId, ctx)
     },
   },

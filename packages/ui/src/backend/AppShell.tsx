@@ -3,6 +3,7 @@ import * as React from 'react'
 import { createContext, useContext } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
+import dynamic from 'next/dynamic'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { Button } from '../primitives/button'
 import { IconButton } from '../primitives/icon-button'
@@ -11,7 +12,6 @@ import { FlashMessages } from './FlashMessages'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { apiCall } from './utils/apiCall'
 import { LastOperationBanner } from './operations/LastOperationBanner'
-import { ProgressTopBar } from './progress/ProgressTopBar'
 import { UpgradeActionBanner } from './upgrades/UpgradeActionBanner'
 import { PartialIndexBanner } from './indexes/PartialIndexBanner'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
@@ -38,6 +38,11 @@ import {
   GLOBAL_HEADER_STATUS_INDICATORS_INJECTION_SPOT_ID,
   GLOBAL_SIDEBAR_STATUS_BADGES_INJECTION_SPOT_ID,
 } from './injection/spotIds'
+
+const ProgressTopBar = dynamic(
+  () => import('./progress/ProgressTopBar').then((module) => module.ProgressTopBar),
+  { ssr: false },
+)
 
 export type AppShellProps = {
   productName?: string

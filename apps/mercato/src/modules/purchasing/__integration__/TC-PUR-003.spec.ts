@@ -455,4 +455,67 @@ test.describe('TC-PUR-003: purchasing API role workflows and user stories', () =
       await deleteCatalogProductIfExists(request, adminToken, secondProductId)
     }
   })
+
+  test('manual request item should auto-create native Open Mercato catalog product', async ({ request }) => {
+    const uniqueSuffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`
+    const manualSku = `MANUAL-${uniqueSuffix}`
+    const manualReference = `MANUAL-REF-${uniqueSuffix}`
+    const manualTitle = `Manual Purchasing ${uniqueSuffix}`
+    let requestId: string | null = null
+    let createdCatalogProductId: string | null = null
+
+    try {
+      const createResponse = await apiRequest(request, 'POST', '/api/purchasing/requests', {
+        token: salesToken,
+        data: {
+          customerName: `Manual Intake ${uniqueSuffix}`,
+          customerNip: createValidNip(`${Date.now()}${Math.floor(Math.random() * 1000)}`),
+          items: [
+            {
+              sku: manualSku,
+              referenceNumber: manualReference,
+              productName: manualTitle,
+              quantity: 2,
+            },
+          ],
+        },
+      })
+      await expectOk(createResponse, 'create request with manual item')
+      requestId = requireId((await readJson<IdResponse>(createResponse)).id, 'request id')
+
+      const items = await fetchRequestItems(request, purchasingToken, requestId)
+      expect(items).toHaveLength(1)
+      createdCatalogProductId = requireId(
+        typeof items[0]?.catalog_product_id === 'string'
+          ? items[0].catalog_product_id
+          : typeof items[0]?.catalogProductId === 'string'
+            ? items[0].catalogProductId
+            : null,
+        'catalog product id for manual item',
+      )
+
+      const catalogResponse = await apiRequest(
+        request,
+        'GET',
+        `/api/catalog/products?search=${encodeURIComponent(manualSku)}&page=1&pageSize=20`,
+        { token: adminToken },
+      )
+      await expectOk(catalogResponse, 'search native OM catalog product created from manual item')
+      const catalogBody = await readJson<PagedResponse>(catalogResponse)
+      const productRow = Array.isArray(catalogBody.items)
+        ? catalogBody.items.find((item) => item.id === createdCatalogProductId)
+        : null
+      expect(productRow).toBeTruthy()
+      expect(productRow?.sku).toBe(manualSku)
+      expect(productRow?.title).toBe(manualTitle)
+    } finally {
+      if (requestId) {
+        await apiRequest(request, 'DELETE', '/api/purchasing/requests', {
+          token: adminToken,
+          data: { id: requestId },
+        }).catch(() => undefined)
+      }
+      await deleteCatalogProductIfExists(request, adminToken, createdCatalogProductId)
+    }
+  })
 })
