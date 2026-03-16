@@ -12,11 +12,6 @@ import {
   convertToSectionNavGroups,
 } from '@open-mercato/ui/backend/utils/nav'
 import type { AdminNavItem } from '@open-mercato/ui/backend/utils/nav'
-import { ProfileDropdown } from '@open-mercato/ui/backend/ProfileDropdown'
-import { SettingsButton } from '@open-mercato/ui/backend/SettingsButton'
-import { GlobalSearchDialog } from '@open-mercato/search/modules/search/frontend'
-import OrganizationSwitcher from '@/components/OrganizationSwitcher'
-import { NotificationBellWrapper } from '@/components/NotificationBellWrapper'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { I18nProvider } from '@open-mercato/shared/lib/i18n/context'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
@@ -35,7 +30,9 @@ import { resolveFeatureCheckContext } from '@open-mercato/core/modules/directory
 import { profileSections, profilePathPrefixes } from '@open-mercato/core/modules/auth/lib/profile-sections'
 import { APP_VERSION } from '@open-mercato/shared/lib/version'
 import { PageInjectionBoundary } from '@open-mercato/ui/backend/injection/PageInjectionBoundary'
-import { AiAssistantIntegration, AiChatHeaderButton } from '@open-mercato/ai-assistant/frontend'
+import { CustomEntity } from '@open-mercato/core/modules/entities/data/entities'
+import { ComponentOverridesBootstrap } from '@/components/ComponentOverridesBootstrap'
+import { BackendMobileSidebarChrome, BackendRightHeader } from '@/components/BackendChrome'
 
 type NavItem = {
   href: string
@@ -147,12 +144,39 @@ export default async function BackendLayout({ children, params }: { children: Re
       }
     : undefined
 
+  let userEntities: Array<{ entityId: string; label: string; href: string }> | undefined
+  if (auth) {
+    try {
+      const container = await ensureContainer()
+      const em = container.resolve('em') as EntityManager
+      const where: FilterQuery<CustomEntity> = {
+        isActive: true,
+        showInSidebar: true,
+      }
+      where.$and = [
+        { $or: [{ organizationId: auth.orgId ?? undefined }, { organizationId: null }] },
+        { $or: [{ tenantId: auth.tenantId ?? undefined }, { tenantId: null }] },
+      ]
+      const entities = await em.find(CustomEntity, where, { orderBy: { label: 'asc' } })
+      userEntities = entities.map((entity) => ({
+        entityId: entity.entityId,
+        label: entity.label,
+        href: `/backend/entities/user/${encodeURIComponent(entity.entityId)}/records`,
+      }))
+    } catch {
+      userEntities = undefined
+    }
+  }
+
   const entries = await buildAdminNav(
     modules,
     ctx,
-    undefined,
+    userEntities,
     (key, fallback) => (key ? translate(key, fallback) : fallback),
     featureChecker ? { checkFeatures: featureChecker } : undefined,
+  )
+  const showIntegrationsButton = entries.some(
+    (entry) => entry.href === '/backend/integrations' && entry.enabled !== false && entry.hidden !== true,
   )
 
   const groupMap = new Map<string, {
@@ -324,21 +348,21 @@ export default async function BackendLayout({ children, params }: { children: Re
 
   const collapsedCookie = cookieStore.get('om_sidebar_collapsed')?.value
   const initialCollapsed = collapsedCookie === '1'
+  const isPurchasingRoute = path === '/backend/purchasing' || path.startsWith('/backend/purchasing/')
 
   const rightHeaderContent = (
-    <>
-      <AiChatHeaderButton />
-      <GlobalSearchDialog embeddingConfigured={embeddingConfigured} missingConfigMessage={missingConfigMessage} />
-      <div className="hidden lg:contents">
-        <OrganizationSwitcher />
-      </div>
-      <SettingsButton />
-      <ProfileDropdown email={auth?.email} />
-      <NotificationBellWrapper />
-    </>
+    <BackendRightHeader
+      email={auth?.email ?? null}
+      showIntegrationsButton={showIntegrationsButton}
+      tenantId={auth?.tenantId ?? null}
+      organizationId={auth?.orgId ?? null}
+      embeddingConfigured={embeddingConfigured}
+      missingConfigMessage={missingConfigMessage}
+      lean={isPurchasingRoute}
+    />
   )
 
-  const mobileSidebarContent = <OrganizationSwitcher compact />
+  const mobileSidebarContent = <BackendMobileSidebarChrome lean={isPurchasingRoute} />
 
   const deployEnv = process.env.DEPLOY_ENV
   const baseProductName = translate('appShell.productName', 'Open Mercato')
@@ -356,10 +380,7 @@ export default async function BackendLayout({ children, params }: { children: Re
     <>
       <Script async src="https://w.appzi.io/w.js?token=TtIV6" strategy="afterInteractive" />
       <I18nProvider locale={locale} dict={dict}>
-        <AiAssistantIntegration
-          tenantId={auth?.tenantId ?? null}
-          organizationId={auth?.orgId ?? null}
-        >
+        <ComponentOverridesBootstrap>
           <AppShell
             key={path}
             productName={productName}
@@ -383,7 +404,7 @@ export default async function BackendLayout({ children, params }: { children: Re
               {children}
             </PageInjectionBoundary>
           </AppShell>
-        </AiAssistantIntegration>
+        </ComponentOverridesBootstrap>
       </I18nProvider>
     </>
   )

@@ -7,7 +7,7 @@ import type { PluggableList } from 'unified'
 import { useRouter } from 'next/navigation'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { DataTable, withDataTableNamespaces } from '@open-mercato/ui/backend/DataTable'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { BooleanIcon } from '@open-mercato/ui/backend/ValueIcons'
@@ -18,6 +18,7 @@ import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Users } from 'lucide-react'
+import { formatDateTime } from '@open-mercato/shared/lib/time'
 
 const PAGE_SIZE = 50
 const isTestEnv = typeof process !== 'undefined' && process.env.NODE_ENV === 'test'
@@ -316,11 +317,6 @@ function mapApiTeam(item: Record<string, unknown>): TeamRow {
     : typeof item.member_count === 'number'
       ? item.member_count
       : 0
-  return { id, name, description, isActive, updatedAt, memberCount }
+  return withDataTableNamespaces({ id, name, description, isActive, updatedAt, memberCount }, item)
 }
 
-function formatDateTime(value: string): string {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return parsed.toLocaleString()
-}

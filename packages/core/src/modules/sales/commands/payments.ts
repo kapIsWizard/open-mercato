@@ -73,6 +73,8 @@ export type PaymentSnapshot = {
 type PaymentUndoPayload = {
   before?: PaymentSnapshot | null
   after?: PaymentSnapshot | null
+  orderPaymentMethodIdBefore?: string | null
+  orderPaymentMethodCodeBefore?: string | null
 }
 
 const toNumber = (value: unknown): number => {
@@ -311,7 +313,7 @@ async function recomputeOrderPaymentTotals(
 
 const createPaymentCommand: CommandHandler<
   PaymentCreateInput,
-  { paymentId: string; orderTotals?: { paidTotalAmount: number; refundedTotalAmount: number; outstandingAmount: number } }
+  { paymentId: string; orderTotals?: { paidTotalAmount: number; refundedTotalAmount: number; outstandingAmount: number }; orderPaymentMethodIdBefore?: string | null; orderPaymentMethodCodeBefore?: string | null }
 > = {
   id: 'sales.payments.create',
   async execute(rawInput, ctx) {
@@ -348,6 +350,14 @@ const createPaymentCommand: CommandHandler<
       )
       ensureSameScope(method, input.organizationId, input.tenantId)
       paymentMethod = method
+    }
+    const orderPaymentMethodIdBefore = order.paymentMethodId ?? null
+    const orderPaymentMethodCodeBefore = order.paymentMethodCode ?? null
+    if (paymentMethod && !order.paymentMethodId) {
+      order.paymentMethodId = paymentMethod.id
+      order.paymentMethodCode = paymentMethod.code ?? null
+      order.updatedAt = new Date()
+      em.persist(order)
     }
     if (input.documentStatusEntryId !== undefined) {
       const orderStatus = await resolveDictionaryEntryValue(em, input.documentStatusEntryId ?? null)
@@ -482,7 +492,7 @@ const createPaymentCommand: CommandHandler<
       console.error('[sales.payments.create] Failed to create notification:', err)
     }
 
-    return { paymentId: payment.id, orderTotals: totals }
+    return { paymentId: payment.id, orderTotals: totals, orderPaymentMethodIdBefore, orderPaymentMethodCodeBefore }
   },
   captureAfter: async (_input, result, ctx) => {
     const em = (ctx.container.resolve('em') as EntityManager).fork()
@@ -501,7 +511,7 @@ const createPaymentCommand: CommandHandler<
       tenantId: after.tenantId,
       organizationId: after.organizationId,
       snapshotAfter: after,
-      payload: { undo: { after } satisfies PaymentUndoPayload },
+      payload: { undo: { after, orderPaymentMethodIdBefore: result.orderPaymentMethodIdBefore ?? null, orderPaymentMethodCodeBefore: result.orderPaymentMethodCodeBefore ?? null } satisfies PaymentUndoPayload },
     }
   },
   undo: async ({ logEntry, ctx }) => {
@@ -539,6 +549,12 @@ const createPaymentCommand: CommandHandler<
       for (const id of orderIds) {
         const order = await em.findOne(SalesOrder, { id })
         if (!order) continue
+        if (id === after.orderId && 'orderPaymentMethodIdBefore' in (payload ?? {})) {
+          order.paymentMethodId = payload.orderPaymentMethodIdBefore ?? null
+          order.paymentMethodCode = payload.orderPaymentMethodCodeBefore ?? null
+          order.updatedAt = new Date()
+          await em.flush()
+        }
         await recomputeOrderPaymentTotals(em, order)
         await em.flush()
       }
@@ -564,21 +580,27 @@ const updatePaymentCommand: CommandHandler<
   },
   async execute(rawInput, ctx) {
     const input = paymentUpdateSchema.parse(rawInput ?? {})
-    ensureTenantScope(ctx, input.tenantId)
-    ensureOrganizationScope(ctx, input.organizationId)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const { translate } = await resolveTranslations()
+    const scopeSeed = assertFound(
+      await em.findOne(SalesPayment, { id: input.id }),
+      'sales.payments.not_found'
+    )
+    const resolvedTenantId = input.tenantId ?? scopeSeed.tenantId
+    const resolvedOrganizationId = input.organizationId ?? scopeSeed.organizationId
+    ensureTenantScope(ctx, resolvedTenantId)
+    ensureOrganizationScope(ctx, resolvedOrganizationId)
     const payment = assertFound(
       await findOneWithDecryption(
         em,
         SalesPayment,
         { id: input.id },
         { populate: ['order'] },
-        { tenantId: input.tenantId, organizationId: input.organizationId },
+        { tenantId: resolvedTenantId, organizationId: resolvedOrganizationId },
       ),
       'sales.payments.not_found'
     )
-    ensureSameScope(payment, input.organizationId, input.tenantId)
+    ensureSameScope(payment, resolvedOrganizationId, resolvedTenantId)
     const previousOrder = payment.order as SalesOrder | null
     if (input.orderId !== undefined) {
       if (!input.orderId) {
@@ -588,7 +610,7 @@ const updatePaymentCommand: CommandHandler<
           await em.findOne(SalesOrder, { id: input.orderId }),
           'sales.payments.order_not_found'
         )
-        ensureSameScope(order, input.organizationId, input.tenantId)
+        ensureSameScope(order, resolvedOrganizationId, resolvedTenantId)
         if (
           order.currencyCode &&
           input.currencyCode &&
@@ -609,7 +631,7 @@ const updatePaymentCommand: CommandHandler<
           await em.findOne(SalesPaymentMethod, { id: input.paymentMethodId }),
           'sales.payments.method_not_found'
         )
-        ensureSameScope(method, input.organizationId, input.tenantId)
+        ensureSameScope(method, resolvedOrganizationId, resolvedTenantId)
         payment.paymentMethod = method
       }
     }

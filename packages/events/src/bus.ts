@@ -1,6 +1,9 @@
 import { createQueue } from '@open-mercato/queue'
 import type { Queue } from '@open-mercato/queue'
 import { getRedisUrl } from '@open-mercato/shared/lib/redis/connection'
+import { isBroadcastEvent } from '@open-mercato/shared/modules/events'
+export { registerCrossProcessEventListener } from './bridge'
+import { publishCrossProcessEvent } from './bridge'
 import type {
   EventBus,
   CreateBusOptions,
@@ -12,6 +15,32 @@ import type {
 
 /** Queue name for persistent events */
 const EVENTS_QUEUE_NAME = 'events'
+
+type GlobalEventTap = (event: string, payload: EventPayload, options?: EmitOptions) => void | Promise<void>
+const GLOBAL_EVENT_TAPS_KEY = '__openMercatoEventBusGlobalTaps__'
+
+function hasTenantScope(payload: EventPayload): boolean {
+  return typeof (payload as Record<string, unknown>)?.tenantId === 'string'
+    && String((payload as Record<string, unknown>).tenantId).trim().length > 0
+}
+
+function getGlobalEventTaps(): Set<GlobalEventTap> {
+  const existing = (globalThis as Record<string, unknown>)[GLOBAL_EVENT_TAPS_KEY]
+  if (existing instanceof Set) {
+    return existing as Set<GlobalEventTap>
+  }
+  const created = new Set<GlobalEventTap>()
+  ;(globalThis as Record<string, unknown>)[GLOBAL_EVENT_TAPS_KEY] = created
+  return created
+}
+
+export function registerGlobalEventTap(handler: GlobalEventTap): () => void {
+  const taps = getGlobalEventTaps()
+  taps.add(handler)
+  return () => {
+    taps.delete(handler)
+  }
+}
 
 /**
  * Match an event name against a pattern.
@@ -161,8 +190,25 @@ export function createEventBus(opts: CreateBusOptions): EventBus {
     payload: EventPayload,
     options?: EmitOptions
   ): Promise<void> {
+    const taps = getGlobalEventTaps()
+    for (const tap of taps) {
+      try {
+        await Promise.resolve(tap(event, payload, options))
+      } catch (error) {
+        console.error(`[events] Global tap error for "${event}":`, error)
+      }
+    }
+
     // Always deliver to in-memory handlers first
     await deliver(event, payload)
+
+    if (isBroadcastEvent(event) && hasTenantScope(payload)) {
+      try {
+        await publishCrossProcessEvent(event, payload, options)
+      } catch (error) {
+        console.error(`[events] Cross-process publish error for "${event}":`, error)
+      }
+    }
 
     // If persistent, also enqueue for async processing
     if (options?.persistent) {

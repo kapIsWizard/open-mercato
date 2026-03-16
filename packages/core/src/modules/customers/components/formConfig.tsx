@@ -5,6 +5,7 @@ import { z } from 'zod'
 import Link from 'next/link'
 import { Check, Pencil, Plus, Settings } from 'lucide-react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { isValidPolishTaxId, normalizePolishTaxId } from '@open-mercato/shared/lib/pl/nip'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { Button } from '@open-mercato/ui/primitives/button'
 import {
@@ -79,6 +80,7 @@ export type CompanyFormValues = {
   source?: string
   legalName?: string
   brandName?: string
+  taxId?: string
   domain?: string
   websiteUrl?: string
   industry?: string
@@ -98,6 +100,16 @@ type DictionarySelectFieldProps = {
 
 const emailValidationSchema = z.string().email()
 const EMAIL_CHECK_DEBOUNCE_MS = 350
+const companyTaxIdFormSchema = z
+  .string()
+  .trim()
+  .optional()
+  .or(z.literal(''))
+  .transform((value) => {
+    const normalized = normalizePolishTaxId(value)
+    return normalized ?? undefined
+  })
+  .refine((value) => !value || isValidPolishTaxId(value), 'Enter a valid NIP.')
 
 const createSectionHeadingField = (id: string, title: string): CrudField => ({
   id,
@@ -1053,6 +1065,7 @@ export const createCompanyFormSchema = () =>
         .or(z.literal(''))
         .transform((val) => (val === '' ? undefined : val))
         .optional(),
+      taxId: companyTaxIdFormSchema,
       domain: z
         .string()
         .trim()
@@ -1141,6 +1154,13 @@ export const createCompanyFormFields = (t: Translator): CrudField[] => {
       label: t('customers.companies.detail.fields.brandName', 'Brand name'),
       type: 'text',
       layout: 'half',
+    },
+    {
+      id: 'taxId',
+      label: t('customers.companies.detail.fields.taxId', 'NIP'),
+      type: 'text',
+      layout: 'half',
+      placeholder: t('customers.companies.detail.fields.taxIdPlaceholder', '1234567890'),
     },
     {
       id: 'domain',
@@ -1266,7 +1286,7 @@ export const createCompanyFormGroups = (t: Translator): CrudFormGroup[] => [
     id: 'profile',
     title: t('customers.companies.form.groups.profile'),
     column: 1,
-    fields: ['legalName', 'brandName', 'domain', 'websiteUrl', 'industry', 'sizeBucket', 'annualRevenue'],
+    fields: ['legalName', 'brandName', 'taxId', 'domain', 'websiteUrl', 'industry', 'sizeBucket', 'annualRevenue'],
   },
   {
     id: 'addresses',
@@ -1309,6 +1329,12 @@ export function buildCompanyPayload(values: CompanyFormValues, organizationId?: 
   assign('source', typeof values.source === 'string' ? values.source : undefined)
   assign('legalName', typeof values.legalName === 'string' ? values.legalName : undefined)
   assign('brandName', typeof values.brandName === 'string' ? values.brandName : undefined)
+  assign(
+    'taxId',
+    typeof values.taxId === 'string'
+      ? normalizePolishTaxId(values.taxId) ?? undefined
+      : undefined,
+  )
   assign('domain', typeof values.domain === 'string' ? values.domain?.toLowerCase() : undefined)
   assign('websiteUrl', typeof values.websiteUrl === 'string' ? values.websiteUrl : undefined)
   assign('industry', typeof values.industry === 'string' ? values.industry : undefined)

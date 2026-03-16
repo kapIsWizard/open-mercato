@@ -6,10 +6,42 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { AuthService } from '@open-mercato/core/modules/auth/services/authService'
 import { signJwt } from '@open-mercato/shared/lib/auth/jwt'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import { shouldUseSecureCookies } from '@open-mercato/shared/lib/url'
 import type { EventBus } from '@open-mercato/events/types'
 import { parseBooleanToken } from '@open-mercato/shared/lib/boolean'
+import { emitAuthEvent } from '@open-mercato/core/modules/auth/events'
+import { rateLimitErrorSchema } from '@open-mercato/shared/lib/ratelimit/helpers'
+import { readEndpointRateLimitConfig } from '@open-mercato/shared/lib/ratelimit/config'
+import { checkAuthRateLimit, resetAuthRateLimit } from '@open-mercato/core/modules/auth/lib/rateLimitCheck'
+
+const loginRateLimitConfig = readEndpointRateLimitConfig('LOGIN', {
+  points: 5, duration: 60, blockDuration: 60, keyPrefix: 'login',
+})
+const loginIpRateLimitConfig = readEndpointRateLimitConfig('LOGIN_IP', {
+  points: 20, duration: 60, blockDuration: 60, keyPrefix: 'login-ip',
+})
+
+export const metadata = {}
 
 // validation comes from userLoginSchema
+
+function shouldWarmQueryIndexOnLogin(): boolean {
+  return parseBooleanToken(process.env.AUTH_LOGIN_QUERY_INDEX_WARMUP) === true
+}
+
+function resolveDefaultLoginRedirect(roleNames: string[]): string {
+  const normalized = new Set(roleNames.map((role) => role.trim()).filter(Boolean))
+  if (normalized.has('superadmin') || normalized.has('admin')) return '/backend'
+  if (
+    normalized.has('purchasing')
+    || normalized.has('sales')
+    || normalized.has('bok')
+    || normalized.has('employee')
+  ) {
+    return '/backend/purchasing/requests'
+  }
+  return '/backend'
+}
 
 export async function POST(req: Request) {
   const { translate } = await resolveTranslations()
@@ -20,6 +52,11 @@ export async function POST(req: Request) {
   const tenantIdRaw = String(form.get('tenantId') ?? form.get('tenant') ?? '').trim()
   const requireRoleRaw = (String(form.get('requireRole') ?? form.get('role') ?? '')).trim()
   const requiredRoles = requireRoleRaw ? requireRoleRaw.split(',').map((s) => s.trim()).filter(Boolean) : []
+  // Rate limit — two layers, both checked before validation and DB work
+  const { error: rateLimitError, compoundKey: rateLimitCompoundKey } = await checkAuthRateLimit({
+    req, ipConfig: loginIpRateLimitConfig, compoundConfig: loginRateLimitConfig, compoundIdentifier: email,
+  })
+  if (rateLimitError) return rateLimitError
   const parsed = userLoginSchema.pick({ email: true, password: true, tenantId: true }).safeParse({
     email,
     password,
@@ -45,10 +82,12 @@ export async function POST(req: Request) {
     user = users[0] ?? null
   }
   if (!user || !user.passwordHash) {
+    void emitAuthEvent('auth.login.failed', { email: parsed.data.email, reason: 'invalid_credentials' }).catch(() => undefined)
     return NextResponse.json({ ok: false, error: translate('auth.login.errors.invalidCredentials', 'Invalid email or password') }, { status: 401 })
   }
   const ok = await auth.verifyPassword(user, parsed.data.password)
   if (!ok) {
+    void emitAuthEvent('auth.login.failed', { email: parsed.data.email, reason: 'invalid_password' }).catch(() => undefined)
     return NextResponse.json({ ok: false, error: translate('auth.login.errors.invalidCredentials', 'Invalid email or password') }, { status: 401 })
   }
   // Optional role requirement
@@ -60,30 +99,48 @@ export async function POST(req: Request) {
     }
   }
   await auth.updateLastLoginAt(user)
+  // Reset rate limit counter on successful login so legitimate users aren't penalized for prior typos
+  if (rateLimitCompoundKey) {
+    await resetAuthRateLimit(rateLimitCompoundKey, loginRateLimitConfig)
+  }
   const resolvedTenantId = tenantId ?? (user.tenantId ? String(user.tenantId) : null)
   const userRoleNames = await auth.getUserRoles(user, resolvedTenantId)
-  try {
-    const eventBus = (container.resolve('eventBus') as EventBus)
-    void eventBus.emitEvent('query_index.coverage.warmup', {
-      tenantId: resolvedTenantId,
-    }).catch(() => undefined)
-  } catch {
-    // optional warmup
+  if (shouldWarmQueryIndexOnLogin()) {
+    try {
+      const eventBus = (container.resolve('eventBus') as EventBus)
+      void eventBus.emitEvent('query_index.coverage.warmup', {
+        tenantId: resolvedTenantId,
+      }).catch(() => undefined)
+    } catch {
+      // optional warmup
+    }
   }
-  const token = signJwt({ 
-    sub: String(user.id), 
-    tenantId: resolvedTenantId, 
+  const token = signJwt({
+    sub: String(user.id),
+    tenantId: resolvedTenantId,
     orgId: user.organizationId ? String(user.organizationId) : null,
-    email: user.email, 
-    roles: userRoleNames 
+    email: user.email,
+    roles: userRoleNames
   })
-  const res = NextResponse.json({ ok: true, token, redirect: '/backend' })
-  res.cookies.set('auth_token', token, { httpOnly: true, path: '/', sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 60 * 60 * 8 })
+  void emitAuthEvent('auth.login.success', { id: String(user.id), email: user.email, tenantId: resolvedTenantId, organizationId: user.organizationId ? String(user.organizationId) : null }).catch(() => undefined)
+  const responseData: { ok: true; token: string; redirect: string; refreshToken?: string } = {
+    ok: true,
+    token,
+    redirect: resolveDefaultLoginRedirect(userRoleNames),
+  }
   if (remember) {
     const days = Number(process.env.REMEMBER_ME_DAYS || '30')
     const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000)
     const sess = await auth.createSession(user, expiresAt)
-    res.cookies.set('session_token', sess.token, { httpOnly: true, path: '/', sameSite: 'lax', secure: process.env.NODE_ENV === 'production', expires: expiresAt })
+    responseData.refreshToken = sess.token
+  }
+  const res = NextResponse.json(responseData)
+  const secureCookies = shouldUseSecureCookies(req)
+  res.cookies.set('auth_token', token, { httpOnly: true, path: '/', sameSite: 'lax', secure: secureCookies, maxAge: 60 * 60 * 8 })
+  if (remember && responseData.refreshToken) {
+    const days = Number(process.env.REMEMBER_ME_DAYS || '30')
+    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000)
+    res.cookies.set('session_token', responseData.refreshToken, { httpOnly: true, path: '/', sameSite: 'lax', secure: secureCookies, expires: expiresAt })
   }
   return res
 }
@@ -97,6 +154,7 @@ const loginSuccessSchema = z.object({
   ok: z.literal(true),
   token: z.string().describe('JWT token issued for subsequent API calls'),
   redirect: z.string().nullable().describe('Next location the client should navigate to'),
+  refreshToken: z.string().optional().describe('Long-lived refresh token for obtaining new access tokens (only present when remember=true)'),
 })
 
 const loginErrorSchema = z.object({
@@ -124,6 +182,7 @@ const loginMethodDoc: OpenApiMethodDoc = {
     { status: 400, description: 'Validation failed', schema: loginErrorSchema },
     { status: 401, description: 'Invalid credentials', schema: loginErrorSchema },
     { status: 403, description: 'User lacks required role', schema: loginErrorSchema },
+    { status: 429, description: 'Too many login attempts', schema: rateLimitErrorSchema },
   ],
 }
 

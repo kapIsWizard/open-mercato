@@ -7,7 +7,7 @@ import type { PluggableList } from 'unified'
 import { useRouter } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { DataTable, withDataTableNamespaces } from '@open-mercato/ui/backend/DataTable'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow, apiCall } from '@open-mercato/ui/backend/utils/apiCall'
@@ -19,6 +19,7 @@ import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { truncate } from 'fs'
+import { formatDateTime } from '@open-mercato/shared/lib/time'
 
 const PAGE_SIZE = 50
 const isTestEnv = typeof process !== 'undefined' && process.env.NODE_ENV === 'test'
@@ -393,7 +394,7 @@ function mapApiTeamRole(item: Record<string, unknown>): TeamRoleApiRow {
     : null
   const teamName = typeof team?.name === 'string' ? team.name : null
   const memberCount = typeof item.memberCount === 'number' ? item.memberCount : 0
-  return { id, name, description, updatedAt, teamId, teamName, memberCount }
+  return withDataTableNamespaces({ id, name, description, updatedAt, teamId, teamName, memberCount }, item)
 }
 
 function buildTeamRoleRows(items: TeamRoleApiRow[], unassignedLabel: string): TeamRoleRow[] {
@@ -433,11 +434,7 @@ function buildTeamRoleRows(items: TeamRoleApiRow[], unassignedLabel: string): Te
   return rows
 }
 
-function formatDateTime(value: string): string {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return parsed.toLocaleString()
-}
+
 
 function TeamsIcon({ className }: { className?: string }) {
   return (

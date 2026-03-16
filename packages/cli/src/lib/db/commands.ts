@@ -1,9 +1,10 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
-import { MikroORM, type Logger } from '@mikro-orm/core'
+import { MetadataStorage, MikroORM, type Logger } from '@mikro-orm/core'
 import { Migrator } from '@mikro-orm/migrations'
 import { PostgreSqlDriver } from '@mikro-orm/postgresql'
+import { getSslConfig } from '@open-mercato/shared/lib/db/ssl'
 import type { PackageResolver, ModuleEntry } from '../resolver'
 
 const QUIET_MODE = process.env.OM_CLI_QUIET === '1' || process.env.MERCATO_QUIET === '1'
@@ -41,6 +42,42 @@ function getClientUrl(): string {
   const url = process.env.DATABASE_URL
   if (!url) throw new Error('DATABASE_URL is not set')
   return url
+}
+
+function getDatabaseName(): string {
+  const clientUrl = getClientUrl()
+  try {
+    const url = new URL(clientUrl)
+    return path.basename(url.pathname || '').replace(/^\//, '') || 'open-mercato'
+  } catch {
+    return path.basename(clientUrl.split('?')[0] ?? '') || 'open-mercato'
+  }
+}
+
+function getSnapshotPath(migrationsPath: string): string {
+  return path.join(migrationsPath, `.snapshot-${getDatabaseName()}.json`)
+}
+
+function ensureBaselineSnapshot(migrationsPath: string): void {
+  const snapshotPath = getSnapshotPath(migrationsPath)
+  const hasMigrationFiles = fs.existsSync(migrationsPath)
+    && fs.readdirSync(migrationsPath).some((file) => file.startsWith('Migration') && file.endsWith('.ts'))
+  if (hasMigrationFiles || fs.existsSync(snapshotPath)) {
+    return
+  }
+  fs.writeFileSync(
+    snapshotPath,
+    JSON.stringify(
+      {
+        namespaces: ['public'],
+        name: 'public',
+        tables: [],
+        nativeEnums: {},
+      },
+      null,
+      2,
+    ),
+  )
 }
 
 function sortModules(mods: ModuleEntry[]): ModuleEntry[] {
@@ -87,6 +124,7 @@ async function loadModuleEntities(entry: ModuleEntry, resolver: PackageResolver)
   const roots = resolver.getModulePaths(entry)
   const imps = resolver.getModuleImportBase(entry)
   const isAppModule = entry.from === '@app'
+  const appTsconfigPath = path.join(resolver.getAppDir(), 'tsconfig.json')
   const bases = [
     path.join(roots.appBase, 'data'),
     path.join(roots.pkgBase, 'data'),
@@ -106,7 +144,9 @@ async function loadModuleEntities(entry: ModuleEntry, resolver: PackageResolver)
           ? pathToFileURL(p.replace(/\.ts$/, '.js')).href
           : `${fromApp ? imps.appBase : imps.pkgBase}/${sub}/${f.replace(/\.ts$/, '')}`
         try {
-          const mod = await import(importPath)
+          const mod = (isAppModule && fromApp)
+            ? await importAppModuleEntities(p, appTsconfigPath)
+            : await import(importPath)
           const entities = Object.values(mod).filter((v) => typeof v === 'function')
           if (entities.length) return entities as any[]
         } catch (err) {
@@ -119,6 +159,14 @@ async function loadModuleEntities(entry: ModuleEntry, resolver: PackageResolver)
     }
   }
   return []
+}
+
+async function importAppModuleEntities(filePath: string, tsconfigPath: string): Promise<Record<string, unknown>> {
+  const { tsImport } = await import('tsx/esm/api')
+  return await tsImport(filePath, {
+    parentURL: import.meta.url,
+    tsconfig: fs.existsSync(tsconfigPath) ? tsconfigPath : false,
+  }) as Record<string, unknown>
 }
 
 function getMigrationsPath(entry: ModuleEntry, resolver: PackageResolver): string {
@@ -159,15 +207,20 @@ export async function dbGenerate(resolver: PackageResolver, options: DbOptions =
   for (const entry of ordered) {
     const modId = entry.id
     const sanitizedModId = sanitizeModuleId(modId)
+    if (entry.from === '@app') {
+      MetadataStorage.clear()
+    }
     const entities = await loadModuleEntities(entry, resolver)
     if (!entities.length) continue
 
     const migrationsPath = getMigrationsPath(entry, resolver)
     fs.mkdirSync(migrationsPath, { recursive: true })
+    ensureBaselineSnapshot(migrationsPath)
 
     const tableName = `mikro_orm_migrations_${sanitizedModId}`
     validateTableName(tableName)
 
+    const sslConfig = getSslConfig()
     const orm = await MikroORM.init<PostgreSqlDriver>({
       driver: PostgreSqlDriver,
       clientUrl: getClientUrl(),
@@ -190,6 +243,11 @@ export async function dbGenerate(resolver: PackageResolver, options: DbOptions =
         acquireTimeoutMillis: 60000,
         destroyTimeoutMillis: 30000,
       },
+      driverOptions: sslConfig ? {
+        connection: {
+          ssl: sslConfig,
+        },
+      } : undefined,
     })
 
     const migrator = orm.getMigrator() as Migrator
@@ -221,6 +279,9 @@ export async function dbGenerate(resolver: PackageResolver, options: DbOptions =
     }
 
     await orm.close(true)
+    if (entry.from === '@app') {
+      MetadataStorage.clear()
+    }
   }
 
   console.log(results.join('\n'))
@@ -246,14 +307,17 @@ export async function dbMigrate(resolver: PackageResolver, options: DbOptions = 
     const tableName = `mikro_orm_migrations_${sanitizedModId}`
     validateTableName(tableName)
 
-    // For @app modules, entities may be empty since TypeScript files can't be imported at runtime
-    // Use discovery.warnWhenNoEntities: false to allow running migrations without entities
+    // dbMigrate only runs existing migration files — entities are intentionally
+    // omitted so MikroORM does not compare them against the snapshot and
+    // auto-generate a phantom diff migration (that would duplicate tables
+    // already created by committed migrations).
+    const sslConfig = getSslConfig()
     const orm = await MikroORM.init<PostgreSqlDriver>({
       driver: PostgreSqlDriver,
       clientUrl: getClientUrl(),
       loggerFactory: () => createMinimalLogger(),
       dynamicImportProvider,
-      entities: entities.length ? entities : [],
+      entities: [],
       discovery: { warnWhenNoEntities: false },
       migrations: {
         path: migrationsPath,
@@ -271,6 +335,11 @@ export async function dbMigrate(resolver: PackageResolver, options: DbOptions = 
         acquireTimeoutMillis: 60000,
         destroyTimeoutMillis: 30000,
       },
+      driverOptions: sslConfig ? {
+        connection: {
+          ssl: sslConfig,
+        },
+      } : undefined,
     })
 
     const migrator = orm.getMigrator() as Migrator
@@ -374,7 +443,7 @@ export async function dbGreenfield(resolver: PackageResolver, options: Greenfiel
   console.log('Dropping per-module migration tables...')
   try {
     const { Client } = await import('pg')
-    const client = new Client({ connectionString: getClientUrl() })
+    const client = new Client({ connectionString: getClientUrl(), ssl: getSslConfig() })
     await client.connect()
     try {
       await client.query('BEGIN')
@@ -404,10 +473,10 @@ export async function dbGreenfield(resolver: PackageResolver, options: Greenfiel
   console.log('Dropping ALL public tables for true greenfield...')
   try {
     const { Client } = await import('pg')
-    const client = new Client({ connectionString: getClientUrl() })
+    const client = new Client({ connectionString: getClientUrl(), ssl: getSslConfig() })
     await client.connect()
     try {
-      const res = await client.query(`SELECT tablename FROM pg_tables WHERE schemaname = 'public'`)
+      const res = await client.query(`SELECT tablename FROM pg_tables WHERE schemaname = current_schema()`)
       const tables: string[] = (res.rows || []).map((r: any) => String(r.tablename))
       if (tables.length) {
         await client.query('BEGIN')

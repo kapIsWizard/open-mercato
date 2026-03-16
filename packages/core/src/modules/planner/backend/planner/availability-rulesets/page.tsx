@@ -8,7 +8,7 @@ import type { PluggableList } from 'unified'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { DataTable, withDataTableNamespaces } from '@open-mercato/ui/backend/DataTable'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -18,6 +18,7 @@ import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverE
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
+import { formatDateTime } from '@open-mercato/shared/lib/time'
 
 const PAGE_SIZE = 50
 const MARKDOWN_PLUGINS: PluggableList = [remarkGfm]
@@ -232,17 +233,12 @@ function mapRuleSet(item: Record<string, unknown>): RuleSetRow {
       : typeof item.updated_at === 'string'
         ? item.updated_at
         : null
-  return {
+  return withDataTableNamespaces({
     id,
     name,
     description,
     timezone,
     updatedAt,
-  }
+  }, item)
 }
 
-function formatDateTime(value: string): string {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return parsed.toLocaleString()
-}

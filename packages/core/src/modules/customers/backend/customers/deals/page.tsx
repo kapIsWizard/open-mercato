@@ -6,7 +6,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable, type DataTableExportFormat } from '@open-mercato/ui/backend/DataTable'
+import { DataTable, type DataTableExportFormat, withDataTableNamespaces } from '@open-mercato/ui/backend/DataTable'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { buildCrudExportUrl, deleteCrud } from '@open-mercato/ui/backend/utils/crud'
@@ -36,6 +36,8 @@ type DealRow = {
   title: string
   status?: string | null
   pipelineStage?: string | null
+  pipelineStageId?: string | null
+  pipelineId?: string | null
   valueAmount?: number | null
   valueCurrency?: string | null
   probability?: number | null
@@ -442,6 +444,8 @@ export default function CustomersDealsPage() {
     'pipeline-stages': {},
   })
 
+  const [pipelineNames, setPipelineNames] = React.useState<Record<string, string>>({})
+
   const fetchDictionaryEntries = React.useCallback(
     async (kind: DictionaryKey) => {
       try {
@@ -463,6 +467,22 @@ export default function CustomersDealsPage() {
     loadDictionaries().catch(() => {})
     return () => { cancelled = true }
   }, [fetchDictionaryEntries, reloadToken])
+
+  React.useEffect(() => {
+    let cancelled = false
+    async function loadPipelines() {
+      try {
+        const call = await apiCall<{ items?: Array<{ id: string; name: string }> }>('/api/customers/pipelines')
+        if (cancelled || !call.ok) return
+        const items = Array.isArray(call.result?.items) ? call.result.items : []
+        const map: Record<string, string> = {}
+        items.forEach((p) => { if (p.id && p.name) map[p.id] = p.name })
+        setPipelineNames(map)
+      } catch {}
+    }
+    loadPipelines().catch(() => {})
+    return () => { cancelled = true }
+  }, [reloadToken, scopeVersion])
 
   React.useEffect(() => {
     peopleCacheRef.current.clear()
@@ -815,6 +835,14 @@ export default function CustomersDealsPage() {
         cell: ({ row }) => renderDictionaryCell('pipeline-stages', row.original.pipelineStage),
       },
       {
+        accessorKey: 'pipelineId',
+        header: t('customers.deals.list.columns.pipeline', 'Pipeline'),
+        cell: ({ row }) => {
+          const name = row.original.pipelineId ? pipelineNames[row.original.pipelineId] : null
+          return name ? <span className="text-sm">{name}</span> : noValue
+        },
+      },
+      {
         accessorKey: 'valueAmount',
         header: t('customers.deals.list.columns.value'),
         cell: ({ row }) => (
@@ -864,7 +892,7 @@ export default function CustomersDealsPage() {
       },
       ...customColumns,
     ]
-  }, [customFieldDefs, dictionaryMaps, t])
+  }, [customFieldDefs, dictionaryMaps, pipelineNames, t])
 
   return (
     <Page>
@@ -950,6 +978,8 @@ function mapDeal(item: Record<string, unknown>): DealRow | null {
   const title = typeof item.title === 'string' ? item.title : ''
   const status = typeof item.status === 'string' ? item.status : null
   const pipelineStage = typeof item.pipeline_stage === 'string' ? item.pipeline_stage : null
+  const pipelineStageId = typeof item.pipeline_stage_id === 'string' ? item.pipeline_stage_id : null
+  const pipelineId = typeof item.pipeline_id === 'string' ? item.pipeline_id : null
   const valueAmountRaw = item.value_amount
   const valueAmount =
     typeof valueAmountRaw === 'number'
@@ -996,11 +1026,13 @@ function mapDeal(item: Record<string, unknown>): DealRow | null {
   for (const [key, value] of Object.entries(item)) {
     if (key.startsWith('cf_')) customFields[key] = value
   }
-  return {
+  return withDataTableNamespaces({
     id,
     title,
     status,
     pipelineStage,
+    pipelineStageId,
+    pipelineId,
     valueAmount,
     valueCurrency,
     probability,
@@ -1009,5 +1041,5 @@ function mapDeal(item: Record<string, unknown>): DealRow | null {
     people,
     companies,
     ...customFields,
-  }
+  }, item)
 }

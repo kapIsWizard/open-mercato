@@ -32,7 +32,7 @@ import {
   ensureOrganizationScope,
   ensureTenantScope,
   extractUndoPayload,
-  assertRecordFound,
+  assertFound,
   syncEntityTags,
   loadEntityTagIds,
   ensureDictionaryEntry,
@@ -587,7 +587,7 @@ const updatePersonCommand: CommandHandler<PersonUpdateInput, { entityId: string 
     const { parsed, custom } = parseWithCustomFields(personUpdateSchema, rawInput)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const entity = await em.findOne(CustomerEntity, { id: parsed.id, deletedAt: null })
-    const record = assertRecordFound(entity, 'Person not found')
+    const record = assertFound(entity, 'Person not found')
     ensureTenantScope(ctx, record.tenantId)
     ensureOrganizationScope(ctx, record.organizationId)
     const profile = await em.findOne(CustomerPersonProfile, { entity: record })
@@ -660,6 +660,15 @@ const updatePersonCommand: CommandHandler<PersonUpdateInput, { entityId: string 
 
     if (parsed.companyEntityId !== undefined) {
       profile.company = await resolveCompanyReference(em, parsed.companyEntityId, record.organizationId, record.tenantId)
+    }
+
+    const profileFieldsUpdated = [
+      parsed.firstName, parsed.lastName, parsed.preferredName, parsed.jobTitle,
+      parsed.department, parsed.seniority, parsed.timezone, parsed.linkedInUrl,
+      parsed.twitterUrl, parsed.companyEntityId,
+    ].some((v) => v !== undefined)
+    if (profileFieldsUpdated) {
+      record.updatedAt = new Date()
     }
 
     if (parsed.displayName !== undefined) {
@@ -847,7 +856,7 @@ const deletePersonCommand: CommandHandler<{ body?: Record<string, unknown>; quer
       const em = (ctx.container.resolve('em') as EntityManager).fork()
       const snapshot = await loadPersonSnapshot(em, id)
       const entity = await em.findOne(CustomerEntity, { id, deletedAt: null })
-      const record = assertRecordFound(entity, 'Person not found')
+      const record = assertFound(entity, 'Person not found')
       ensureTenantScope(ctx, record.tenantId)
       ensureOrganizationScope(ctx, record.organizationId)
       const profile = await em.findOne(CustomerPersonProfile, { entity: record })

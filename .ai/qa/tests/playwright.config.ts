@@ -3,10 +3,13 @@ import path from 'node:path';
 import { discoverIntegrationSpecFiles } from '../../../packages/cli/src/lib/testing/integration-discovery';
 
 const captureScreenshots = process.env.PW_CAPTURE_SCREENSHOTS === '1';
+const isGitHubActions = process.env.GITHUB_ACTIONS === 'true';
 const projectRoot = path.resolve(__dirname, '..', '..', '..');
+const qaTestResultsRoot = path.join(projectRoot, '.ai', 'qa', 'test-results');
+const normalizePath = (value: string) => value.split(path.sep).join('/');
 const STATIC_TEST_IGNORES = [
-  '.claude/**',
-  '.codex/**',
+  `${normalizePath(path.join(projectRoot, '.claude'))}/**`,
+  `${normalizePath(path.join(projectRoot, '.codex'))}/**`,
 ];
 const discoveredSpecs = discoverIntegrationSpecFiles(projectRoot, path.join(projectRoot, '.ai', 'qa', 'tests'));
 const discoveredSpecPaths = discoveredSpecs.map((entry) => entry.path);
@@ -29,10 +32,17 @@ export default defineConfig({
     screenshot: captureScreenshots ? 'on' : 'only-on-failure',
     trace: 'on-first-retry',
   },
-  reporter: [
-    ['list'],
-    ['json', { outputFile: '.ai/qa/test-results/results.json' }],
-    ['html', { outputFolder: '.ai/qa/test-results/html', open: 'never' }],
-  ],
-  outputDir: '.ai/qa/test-results/artifacts',
+  reporter: isGitHubActions
+    ? [
+        ['github'],
+        ['list'],
+        ['json', { outputFile: path.join(qaTestResultsRoot, 'results.json') }],
+        ['html', { outputFolder: path.join(qaTestResultsRoot, 'html'), open: 'never' }],
+      ]
+    : [
+        ['list'],
+        ['json', { outputFile: path.join(qaTestResultsRoot, 'results.json') }],
+        ['html', { outputFolder: path.join(qaTestResultsRoot, 'html'), open: 'never' }],
+      ],
+  outputDir: path.join(qaTestResultsRoot, 'artifacts'),
 });

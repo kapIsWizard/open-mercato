@@ -1,8 +1,18 @@
 #!/bin/sh
 set -e
 
-# Build packages, then generate (writes packages/core/generated/), then rebuild so core gets dist/generated/
+# Ensure node_modules volume has all workspace symlinks (handles new packages added after volume creation)
 cd /app
+
+if [ -f /tmp/docker-exec-skip-rebuilt.skip ]; then
+  echo "Skipping rebuild for this restart..."
+  rm -f /tmp/docker-exec-skip-rebuilt.skip
+  exec yarn dev
+fi
+
+yarn install
+
+# Build packages, then generate (writes packages/core/generated/), then rebuild so core gets dist/generated/
 yarn build:packages
 yarn generate
 yarn build:packages

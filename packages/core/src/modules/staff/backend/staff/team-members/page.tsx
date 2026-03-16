@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import type { ColumnDef, SortingFn, SortingState } from '@tanstack/react-table'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { DataTable, withDataTableNamespaces } from '@open-mercato/ui/backend/DataTable'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { BooleanIcon } from '@open-mercato/ui/backend/ValueIcons'
@@ -17,6 +17,7 @@ import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Pencil } from 'lucide-react'
+import { formatDateTime } from '@open-mercato/shared/lib/time'
 
 const PAGE_SIZE = 50
 
@@ -504,7 +505,7 @@ function mapApiTeamMember(item: Record<string, unknown>): TeamMemberApiRow {
       : null
   const team = item.team && typeof item.team === 'object' ? item.team as { name?: unknown } : null
   const teamName = typeof team?.name === 'string' ? team.name : null
-  return {
+  return withDataTableNamespaces({
     id,
     displayName,
     description,
@@ -516,7 +517,7 @@ function mapApiTeamMember(item: Record<string, unknown>): TeamMemberApiRow {
     updatedAt,
     teamId,
     teamName,
-  }
+  }, item)
 }
 
 function compareGroupedRows(
@@ -611,11 +612,7 @@ function buildTeamMemberRows(
   return rows
 }
 
-function formatDateTime(value: string): string {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return parsed.toLocaleString()
-}
+
 
 function renderLabelPills(values: string[]): React.ReactNode {
   if (!values.length) return <span className="text-xs text-muted-foreground">-</span>

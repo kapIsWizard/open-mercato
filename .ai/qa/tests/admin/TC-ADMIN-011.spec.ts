@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, DEFAULT_CREDENTIALS } from '../helpers/auth';
+import { login } from '../helpers/auth';
 import { apiRequest, getAuthToken } from '../helpers/api';
 
 type DashboardLayoutItem = {
@@ -26,21 +26,20 @@ type UserWidgetsResponse = {
   };
 };
 
-type UsersListResponse = {
-  items?: Array<{
-    id?: string;
-    email?: string;
-  }>;
+type FeatureCheckResponse = {
+  userId?: string | null;
 };
 
 const BRANCH_WIDGET_IDS = ['sales.dashboard.newOrders', 'sales.dashboard.newQuotes'] as const;
 
-type JsonReadableResponse = {
-  json: () => Promise<unknown>;
-};
-
-async function readJsonSafe<T>(response: JsonReadableResponse): Promise<T | null> {
-  return response.json().catch(() => null) as Promise<T | null>;
+async function readJsonSafe<T>(response: { text(): Promise<string> }): Promise<T | null> {
+  const raw = await response.text();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -53,7 +52,6 @@ async function readJsonSafe<T>(response: JsonReadableResponse): Promise<T | null
 test.describe('TC-ADMIN-011: User Widget Override And Dashboard Enablement', () => {
   test('should enable widgets for current admin user and switch them on in dashboard', async ({ page, request }) => {
     const token = await getAuthToken(request, 'admin');
-    const adminEmail = DEFAULT_CREDENTIALS.admin.email;
 
     let adminUserId: string | null = null;
     let originalWidgetMode: 'inherit' | 'override' = 'inherit';
@@ -63,11 +61,13 @@ test.describe('TC-ADMIN-011: User Widget Override And Dashboard Enablement', () 
     let originalLayoutItems: DashboardLayoutItem[] = [];
 
     try {
-      const usersResponse = await apiRequest(request, 'GET', '/api/auth/users?page=1&pageSize=50', { token });
-      const usersBody = await readJsonSafe<UsersListResponse>(usersResponse);
-      const adminUser = usersBody?.items?.find((item) => item.email === adminEmail);
-      adminUserId = typeof adminUser?.id === 'string' ? adminUser.id : null;
-      expect(adminUserId, 'Admin user ID should exist in users list').toBeTruthy();
+      const featureCheckResponse = await apiRequest(request, 'POST', '/api/auth/feature-check', {
+        token,
+        data: { features: ['auth.users.edit'] },
+      });
+      const featureCheckBody = await readJsonSafe<FeatureCheckResponse>(featureCheckResponse);
+      adminUserId = typeof featureCheckBody?.userId === 'string' ? featureCheckBody.userId : null;
+      expect(adminUserId, 'Current admin user ID should be returned by feature check').toBeTruthy();
 
       const userWidgetsResponse = await apiRequest(
         request,

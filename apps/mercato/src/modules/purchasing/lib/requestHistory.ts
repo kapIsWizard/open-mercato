@@ -1,0 +1,171 @@
+import type { ActionLog } from '@open-mercato/core/modules/audit_logs/data/entities'
+import { normalizeItemStatusForView, normalizeRequestStatusForView } from './statuses'
+
+type PurchasingHistoryLabels = {
+  systemActor: string
+  requestLabel: string
+  requestItemLabel: string
+  commentLabel: string
+  actionsByCommandId: Record<string, string>
+}
+
+export type PurchasingHistoryEntry = {
+  id: string
+  occurredAt: string
+  kind: 'status' | 'action' | 'comment'
+  action: string
+  actor: { id: string | null; label: string }
+  source: 'action_log'
+  metadata?: {
+    targetType?: 'request' | 'item' | 'comment'
+    targetLabel?: string | null
+    statusFrom?: string | null
+    statusTo?: string | null
+    commandId?: string | null
+  }
+}
+
+function readRequestStatus(snapshot: unknown): string | null {
+  if (!snapshot || typeof snapshot !== 'object') return null
+  const candidate = snapshot as Record<string, unknown>
+  if (typeof candidate.requestStatus === 'string') return normalizeRequestStatusForView(candidate.requestStatus)
+  return null
+}
+
+function readItemStatus(snapshot: unknown): string | null {
+  if (!snapshot || typeof snapshot !== 'object') return null
+  const candidate = snapshot as Record<string, unknown>
+  if (typeof candidate.itemStatus === 'string') return normalizeItemStatusForView(candidate.itemStatus)
+  return null
+}
+
+function readTargetLabel(
+  log: ActionLog,
+  labels: PurchasingHistoryLabels,
+): { targetType: 'request' | 'item' | 'comment'; targetLabel: string | null } {
+  if (log.resourceKind === 'purchasing.request_item') {
+    const after = log.snapshotAfter as Record<string, unknown> | null
+    const before = log.snapshotBefore as Record<string, unknown> | null
+    return {
+      targetType: 'item',
+      targetLabel:
+        (typeof after?.productName === 'string' ? after.productName : null)
+        ?? (typeof before?.productName === 'string' ? before.productName : null)
+        ?? null,
+    }
+  }
+  if (log.resourceKind === 'purchasing.comment') {
+    return {
+      targetType: 'comment',
+      targetLabel: null,
+    }
+  }
+  return {
+    targetType: 'request',
+    targetLabel: labels.requestLabel,
+  }
+}
+
+function detectStatusChange(log: ActionLog): { statusFrom: string | null; statusTo: string | null } | null {
+  const requestBefore = readRequestStatus(log.snapshotBefore)
+  const requestAfter = readRequestStatus(log.snapshotAfter)
+  if (requestBefore !== requestAfter && (requestBefore !== null || requestAfter !== null)) {
+    return { statusFrom: requestBefore, statusTo: requestAfter }
+  }
+
+  const itemBefore = readItemStatus(log.snapshotBefore)
+  const itemAfter = readItemStatus(log.snapshotAfter)
+  if (itemBefore !== itemAfter && (itemBefore !== null || itemAfter !== null)) {
+    return { statusFrom: itemBefore, statusTo: itemAfter }
+  }
+
+  return null
+}
+
+export function normalizeActionLogToPurchasingHistoryEntry(
+  log: ActionLog,
+  displayUsers?: Record<string, string>,
+  labels?: PurchasingHistoryLabels,
+): PurchasingHistoryEntry {
+  const resolvedLabels: PurchasingHistoryLabels = labels ?? {
+    systemActor: 'system',
+    requestLabel: 'Request',
+    requestItemLabel: 'Request item',
+    commentLabel: 'Comment',
+    actionsByCommandId: {},
+  }
+  const actorLabel = log.actorUserId
+    ? (displayUsers?.[log.actorUserId] ?? log.actorUserId)
+    : resolvedLabels.systemActor
+  const statusChange = detectStatusChange(log)
+  const target = readTargetLabel(log, resolvedLabels)
+  const translatedAction =
+    (log.commandId ? resolvedLabels.actionsByCommandId[log.commandId] : null)
+    ?? log.actionLabel
+    ?? log.commandId
+    ?? null
+
+  if (statusChange) {
+    return {
+      id: log.id,
+      occurredAt: log.createdAt.toISOString(),
+      kind: 'status',
+      action: target.targetLabel ?? (target.targetType === 'item' ? resolvedLabels.requestItemLabel : resolvedLabels.requestLabel),
+      actor: { id: log.actorUserId, label: actorLabel },
+      source: 'action_log',
+      metadata: {
+        commandId: log.commandId ?? null,
+        targetType: target.targetType,
+        targetLabel: target.targetLabel,
+        statusFrom: statusChange.statusFrom,
+        statusTo: statusChange.statusTo,
+      },
+    }
+  }
+
+  if (log.resourceKind === 'purchasing.comment') {
+    const after = log.snapshotAfter as Record<string, unknown> | null
+    const before = log.snapshotBefore as Record<string, unknown> | null
+      const body =
+      (typeof after?.body === 'string' ? after.body : null)
+      ?? (typeof before?.body === 'string' ? before.body : null)
+      ?? translatedAction
+      ?? resolvedLabels.commentLabel
+    return {
+      id: log.id,
+      occurredAt: log.createdAt.toISOString(),
+      kind: 'comment',
+      action: body,
+      actor: { id: log.actorUserId, label: actorLabel },
+      source: 'action_log',
+      metadata: {
+        commandId: log.commandId ?? null,
+        targetType: 'comment',
+      },
+    }
+  }
+
+  return {
+    id: log.id,
+    occurredAt: log.createdAt.toISOString(),
+    kind: 'action',
+    action: translatedAction ?? resolvedLabels.requestLabel,
+    actor: { id: log.actorUserId, label: actorLabel },
+    source: 'action_log',
+    metadata: {
+      commandId: log.commandId ?? null,
+      targetType: target.targetType,
+      targetLabel: target.targetLabel,
+    },
+  }
+}
+
+export function buildPurchasingHistoryEntries(input: {
+  actionLogs: ActionLog[]
+  displayUsers?: Record<string, string>
+  labels?: PurchasingHistoryLabels
+}): PurchasingHistoryEntry[] {
+  return input.actionLogs
+    .map((entry) => normalizeActionLogToPurchasingHistoryEntry(entry, input.displayUsers, input.labels))
+    .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+}

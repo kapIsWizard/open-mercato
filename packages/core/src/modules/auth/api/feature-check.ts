@@ -14,13 +14,19 @@ export async function POST(req: Request) {
   let body: any = {}
   try { body = await req.json() } catch {}
   const features: string[] = Array.isArray(body?.features) ? body.features : []
-  if (!features.length) return NextResponse.json({ ok: true, granted: [], userId: auth.sub })
+  const uniqueRoles = Array.from(
+    new Set(
+      (Array.isArray(auth.roles) ? auth.roles : [])
+        .filter((role): role is string => typeof role === 'string' && role.trim().length > 0),
+    ),
+  )
+  if (!features.length) return NextResponse.json({ ok: true, granted: [], userId: auth.sub, roles: uniqueRoles })
   const container = await createRequestContainer()
   const rbac = (container.resolve('rbacService') as any)
   const ok = await rbac.userHasAllFeatures(auth.sub, features, { tenantId: auth.tenantId, organizationId: auth.orgId })
   // Return which features the user has (for batch checking)
   if (ok) {
-    return NextResponse.json({ ok: true, granted: features, userId: auth.sub })
+    return NextResponse.json({ ok: true, granted: features, userId: auth.sub, roles: uniqueRoles })
   }
   // Check individually to see which features are granted
   const granted: string[] = []
@@ -28,7 +34,7 @@ export async function POST(req: Request) {
     const hasFeature = await rbac.userHasAllFeatures(auth.sub, [f], { tenantId: auth.tenantId, organizationId: auth.orgId })
     if (hasFeature) granted.push(f)
   }
-  return NextResponse.json({ ok: false, granted, userId: auth.sub })
+  return NextResponse.json({ ok: false, granted, userId: auth.sub, roles: uniqueRoles })
 }
 
 const featureCheckRequestSchema = z.object({
@@ -39,6 +45,7 @@ const featureCheckResponseSchema = z.object({
   ok: z.boolean().describe('Indicates whether all requested features are granted'),
   granted: z.array(z.string()).describe('Features the current user may access'),
   userId: z.string().describe('Identifier of the authenticated user'),
+  roles: z.array(z.string()).describe('Role names assigned to the authenticated user in the active tenant scope'),
 })
 
 const featureCheckMethodDoc: OpenApiMethodDoc = {

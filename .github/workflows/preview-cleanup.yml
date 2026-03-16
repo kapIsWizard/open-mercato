@@ -1,0 +1,89 @@
+name: Preview Cleanup
+
+# Tears down the Dokploy compose stack when a PR is closed or merged.
+# Works in tandem with preview-deploy.yml — reads the compose ID stored
+# in the PR comment marker left by the deploy workflow.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [develop]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    # Only core contributors — forks never had a preview stack created
+    if: github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - name: Find compose ID from PR comment
+        id: compose
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const markerPrefix = '<!-- preview-compose-id ';
+            const markerSuffix = ' -->';
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            for (let i = comments.length - 1; i >= 0; i--) {
+              const body = comments[i].body || '';
+              const start = body.indexOf(markerPrefix);
+              if (start === -1) continue;
+
+              const after = body.substring(start + markerPrefix.length);
+              const end = after.indexOf(markerSuffix);
+              if (end === -1) continue;
+
+              const id = after.substring(0, end).trim();
+              if (id) {
+                core.info(`Found compose ID to clean up: ${id}`);
+                core.setOutput('compose_id', id);
+                return;
+              }
+            }
+
+            core.info('No preview compose ID found in PR comments — nothing to clean up.');
+            core.setOutput('compose_id', '');
+
+      - name: Stop Dokploy compose stack
+        if: steps.compose.outputs.compose_id != ''
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          COMPOSE_ID: ${{ steps.compose.outputs.compose_id }}
+        run: |
+          set -euo pipefail
+
+          echo "Stopping compose stack: ${COMPOSE_ID}"
+          curl -fsS -X POST "${DOKPLOY_URL}/api/compose.stop" \
+            -H "x-api-key: ${DOKPLOY_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg composeId "$COMPOSE_ID" '{composeId: $composeId}')"
+
+      - name: Remove Dokploy compose stack
+        if: steps.compose.outputs.compose_id != ''
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          COMPOSE_ID: ${{ steps.compose.outputs.compose_id }}
+        run: |
+          set -euo pipefail
+
+          echo "Removing compose stack: ${COMPOSE_ID}"
+          curl -fsS -X POST "${DOKPLOY_URL}/api/compose.remove" \
+            -H "x-api-key: ${DOKPLOY_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg composeId "$COMPOSE_ID" '{composeId: $composeId}')"
+
+          echo "Compose stack ${COMPOSE_ID} removed."

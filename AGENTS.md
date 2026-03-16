@@ -21,11 +21,22 @@ IMPORTANT: Before any research or coding, match the task to the root `AGENTS.md`
 | Adding `setup.ts` for tenant init, declaring role features, seeding defaults/examples | `packages/core/AGENTS.md` → Module Setup |
 | Declaring typed events with `createModuleEvents`, emitting CRUD/lifecycle events, adding event subscribers | `packages/core/AGENTS.md` → Events |
 | Adding in-app notifications, subscriber-based alerts, writing notification renderers | `packages/core/AGENTS.md` → Notifications |
+| Adding reactive notification handlers (`notifications.handlers.ts`), `useNotificationEffect`, auto side-effects on notification arrival | `packages/core/AGENTS.md` → Notifications + `packages/ui/AGENTS.md` |
 | Injecting UI widgets into other modules, defining spot IDs, cross-module UI extensions | `packages/core/AGENTS.md` → Widgets |
+| Building headless injection widgets (menu items, columns, fields), using `InjectionPosition`, or `useInjectionDataWidgets` | `packages/core/AGENTS.md` → Widget Injection + `packages/ui/AGENTS.md` |
+| Injecting menu items into main/settings/profile sidebars or topbar/profile dropdown (`useInjectedMenuItems`, `mergeMenuItems`) | `packages/ui/AGENTS.md` |
+| Adding API route interceptors (`api/interceptors.ts`, before/after hooks, body/query rewrite contracts) | `packages/core/AGENTS.md` → API Interceptors |
+| Adding DataTable extension widgets (columns/row actions/bulk actions/filters) | `packages/core/AGENTS.md` → Widget Injection + `packages/ui/AGENTS.md` → DataTable Guidelines |
+| Adding CrudForm field injection widgets (`crud-form:<entityId>:fields`) | `packages/core/AGENTS.md` → Widget Injection + `packages/ui/AGENTS.md` → CrudForm Guidelines |
+| Replacing or wrapping UI components via `widgets/components.ts` (`replace`/`wrapper`/`props`) | `packages/core/AGENTS.md` → Component Replacement + `packages/ui/AGENTS.md` |
 | Adding custom fields/entities, using DSL helpers (`defineLink`, `cf.*`), declaring `ce.ts` | `packages/core/AGENTS.md` → Custom Fields |
 | Adding entity extensions, cross-module data links, `data/extensions.ts` | `packages/core/AGENTS.md` → Extensions |
 | Configuring RBAC features in `acl.ts`, declarative guards, permission checks | `packages/core/AGENTS.md` → Access Control |
 | Using encrypted queries (`findWithDecryption`), encryption defaults, GDPR fields | `packages/core/AGENTS.md` → Encryption |
+| Adding response enrichers to enrich other modules' API responses | `packages/core/AGENTS.md` → Response Enrichers |
+| Filtering CRUD list APIs by multiple IDs (`?ids=uuid1,uuid2`), including interceptor-driven ID narrowing | `packages/core/AGENTS.md` → API Interceptors + `packages/shared/AGENTS.md` |
+| Adding DOM Event Bridge (SSE-based real-time events to browser), `useAppEvent`, `useOperationProgress` | `packages/events/AGENTS.md` → DOM Event Bridge |
+| Adding new widget event handlers (`onFieldChange`, `onBeforeNavigate`, transformers) | `packages/ui/AGENTS.md` |
 | **Specific Modules** | |
 | Managing people/companies/deals/activities, **copying CRUD patterns for new modules** | `packages/core/src/modules/customers/AGENTS.md` |
 | Building orders/quotes/invoices, pricing calculations, document flow (Quote→Order→Invoice), shipments/payments, channel scoping | `packages/core/src/modules/sales/AGENTS.md` |
@@ -33,6 +44,10 @@ IMPORTANT: Before any research or coding, match the task to the root `AGENTS.md`
 | Users/roles/RBAC implementation, authentication flow, session management, feature-based access control | `packages/core/src/modules/auth/AGENTS.md` |
 | Multi-currency support, exchange rates, dual currency recording, realized gains/losses | `packages/core/src/modules/currencies/AGENTS.md` |
 | Workflow automation, defining step-based workflows, executing instances, user tasks, async activities, event triggers, signals, compensation (saga pattern), visual editor | `packages/core/src/modules/workflows/AGENTS.md` |
+| Integration Marketplace foundation (registry/bundles, credentials, state, health checks, logs, admin UI, integration manifests) | `packages/core/src/modules/integrations/AGENTS.md` |
+| Data Sync hub (adapters, run lifecycle, workers, mapping APIs, scheduled sync, progress linkage, admin UI) | `packages/core/src/modules/data_sync/AGENTS.md` |
+| Building a new integration provider module (adapter, health check, credentials, bundle wiring) | `packages/core/src/modules/integrations/AGENTS.md` + `packages/core/src/modules/data_sync/AGENTS.md` + `.ai/skills/integration-builder/SKILL.md` + `.ai/specs/SPEC-041-2026-02-24-universal-module-extension-system.md` + `.ai/specs/SPEC-045-2026-02-24-integration-marketplace.md` + `.ai/specs/SPEC-045c-payment-shipping-hubs.md` (+ `.ai/specs/SPEC-044-2026-02-24-payment-gateway-integrations.md` for payment providers) |
+| Wiring progress UX for long-running sync operations (top bar polling, job lifecycle, future SSE bridge) | `packages/core/src/modules/data_sync/AGENTS.md` + `packages/events/AGENTS.md` |
 | **Packages** | |
 | Adding reusable utilities, encryption helpers, i18n translations (`useT`/`resolveTranslations`), boolean parsing, data engine types, request scoping | `packages/shared/AGENTS.md` |
 | Building forms (`CrudForm`), data tables (`DataTable`), loading/error states, flash messages, `FormHeader`/`FormFooter`, dialog UX (`Cmd+Enter`/`Escape`) | `packages/ui/AGENTS.md` |
@@ -48,8 +63,11 @@ IMPORTANT: Before any research or coding, match the task to the root `AGENTS.md`
 | Testing standalone apps with Verdaccio, publishing packages, canary releases, template scaffolding | `packages/create-app/AGENTS.md` |
 | **Testing** | |
 | Integration testing, creating/running Playwright tests, converting markdown test cases to TypeScript, CI test pipeline | `.ai/qa/AGENTS.md` + `.ai/skills/integration-tests/SKILL.md` |
-| **Other** | |
+| **Spec Lifecycle** | |
+| Analyzing a spec before implementation: BC impact, risk assessment, gap analysis, readiness report | `.ai/skills/pre-implement-spec/SKILL.md` |
+| Implementing a spec (or specific phases) with coordinated agents, unit tests, docs, progress tracking | `.ai/skills/implement-spec/SKILL.md` |
 | Writing new specs, updating existing specs after implementation, documenting architectural decisions, maintaining changelogs | `.ai/specs/AGENTS.md` |
+| Reviewing code changes for architecture, security, conventions, and quality compliance | `.ai/skills/code-review/SKILL.md` |
 
 ## Core Principles
 
@@ -61,6 +79,8 @@ IMPORTANT: Before any research or coding, match the task to the root `AGENTS.md`
 
 1.  **Spec-first**: Enter plan mode for non-trivial tasks (3+ steps or architectural decisions). Check `.ai/specs/` and `.ai/specs/enterprise/` before coding; create SPEC files using scope-appropriate naming (`SPEC-{number}-{date}-{title}.md` for OSS, `SPEC-ENT-{number}-{date}-{title}.md` for enterprise). Skip for small fixes.
     -   **Detailed Workflow**: Refer to the **`spec-writing` skill** for research, phasing, and architectural review standards (`.ai/skills/spec-writing/SKILL.md`).
+    -   **Pre-implementation analysis**: Before implementing a complex spec, run the **`pre-implement-spec` skill** to audit backward compatibility, identify gaps, and produce a readiness report.
+    -   **Implementation**: Use the **`implement-spec` skill** to execute spec phases with coordinated subagents, unit tests, progress tracking, and code-review compliance gates.
 2.  **Subagent strategy**: Use subagents liberally to keep main context clean. Offload research and parallel analysis. One task per subagent.
 3.  **Self-improvement**: After corrections, update `.ai/lessons.md` or relevant AGENTS.md. Write rules that prevent the same mistake.
 4.  **Verification**: Run tests, check build, suggest user verification. Ask: "Would a staff engineer approve this?"
@@ -104,6 +124,7 @@ All packages use the `@open-mercato/<package>` naming convention:
 ### Where to Put Code
 
 - Put core platform features in `packages/<package>/src/modules/<module>/`
+- Put every external integration provider in a dedicated npm workspace package under `packages/<provider-package>/` (for example `packages/gateway-stripe`, `packages/carrier-inpost`) — do not add provider modules inside `packages/core/src/modules/`
 - Put shared utilities and types in `packages/shared/src/lib/` or `packages/shared/src/modules/`
 - Put UI components in `packages/ui/src/`
 - Put user/app-specific modules in `apps/mercato/src/modules/<module>/`
@@ -118,14 +139,29 @@ All packages use the `@open-mercato/<package>` naming convention:
 | Client-side translations | `import { useT } from '@open-mercato/shared/lib/i18n/context'` |
 | Data engine types | `import type { DataEngine } from '@open-mercato/shared/lib/data/engine'` |
 | Search config types | `import type { SearchModuleConfig } from '@open-mercato/shared/modules/search'` |
+| Injection positioning | `import { InjectionPosition } from '@open-mercato/shared/modules/widgets/injection-position'` |
+| Headless injection widgets hook | `import { useInjectionDataWidgets } from '@open-mercato/ui/backend/injection/useInjectionDataWidgets'` |
+| Menu injection hook | `import { useInjectedMenuItems } from '@open-mercato/ui/backend/injection/useInjectedMenuItems'` |
+| Component replacement hook | `import { useRegisteredComponent } from '@open-mercato/ui/backend/injection/useRegisteredComponent'` |
 | UI primitives | `import { Spinner } from '@open-mercato/ui/primitives/spinner'` |
 | API calls (backend pages) | `import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'` |
 | CRUD forms | `import { CrudForm } from '@open-mercato/ui/backend/crud'` |
+| API interceptor types | `import type { ApiInterceptor } from '@open-mercato/shared/lib/crud/api-interceptor'` |
+| Response enricher types | `import type { ResponseEnricher } from '@open-mercato/shared/lib/crud/response-enricher'` |
+| App event hook | `import { useAppEvent } from '@open-mercato/ui/backend/injection/useAppEvent'` |
+| Event bridge hook | `import { useEventBridge } from '@open-mercato/ui/backend/injection/eventBridge'` |
+| Operation progress hook | `import { useOperationProgress } from '@open-mercato/ui/backend/injection/useOperationProgress'` |
+| Broadcast event check | `import { isBroadcastEvent } from '@open-mercato/shared/modules/events'` |
+
+Import strategy:
+- Prefer package-level imports (`@open-mercato/<package>/...`) over deep relative imports (`../../../...`) when crossing module boundaries, referencing shared module internals, or importing from deeply nested files.
+- Keep short relative imports for same-folder/local siblings (`./x`, `../x`) where they are clearer than package paths.
 
 ## Conventions
 
 - Modules: plural, snake_case (folders and `id`). Special cases: `auth`, `example`.
 - **Event IDs**: `module.entity.action` (singular entity, past tense action, e.g., `pos.cart.completed`). use dots as separators.
+- `clientBroadcast: true` in EventDefinition bridges events to browser via SSE (DOM Event Bridge)
 - JS/TS fields and identifiers: camelCase.
 - Database tables and columns: snake_case; table names plural.
 - Common columns: `id`, `created_at`, `updated_at`, `deleted_at`, `is_active`, `organization_id`, `tenant_id`.
@@ -157,26 +193,63 @@ All paths use `src/modules/<module>/` as shorthand. See `packages/core/AGENTS.md
 | `ce.ts` | `entities` | Custom entities / custom field sets |
 | `search.ts` | `searchConfig` | Search indexing configuration |
 | `events.ts` | `eventsConfig` | Typed event declarations |
+| `translations.ts` | `translatableFields` | Translatable field declarations per entity |
 | `notifications.ts` | `notificationTypes` | Notification type definitions |
 | `notifications.client.ts` | — | Client-side notification renderers |
 | `ai-tools.ts` | `aiTools` | MCP AI tool definitions |
+| `api/interceptors.ts` | `interceptors` | API route interception hooks (before/after) |
 | `data/entities.ts` | — | MikroORM entities |
 | `data/validators.ts` | — | Zod validation schemas |
 | `data/extensions.ts` | `extensions` | Entity extensions (module links) |
 | `widgets/injection/` | — | Injected UI widgets |
 | `widgets/injection-table.ts` | — | Widget-to-slot mappings |
+| `widgets/components.ts` | `componentOverrides` | Component replacement/wrapper/props override definitions |
+| `data/enrichers.ts` | `enrichers` | Response enrichers for data federation |
 
 ### Key Rules
 
 - API routes MUST export `openApi` for documentation generation
 - CRUD routes: use `makeCrudRoute` with `indexer: { entityType }` for query index coverage
+- Write operations: implement via the Command pattern (see `packages/core/src/modules/customers/commands/*`)
 - Feature naming convention: `<module>.<action>` (e.g., `example.view`, `example.create`).
 - setup.ts: always declare `defaultRoleFeatures` when adding features to `acl.ts`
 - Custom fields: use `collectCustomFieldValues()` from `@open-mercato/ui/backend/utils/customFieldValues`
 - Events: use `createModuleEvents()` with `as const` for typed emit
+- Translations: when adding entities with user-facing text fields (title, name, description, label), create `translations.ts` at module root declaring translatable fields. Run `yarn generate` after adding.
 - Widget injection: declare in `widgets/injection/`, map via `injection-table.ts`
+- API interception: declare interceptors in `api/interceptors.ts`; keep hooks fail-closed and scoped by route + method
+- Interceptors that narrow CRUD list results SHOULD prefer rewriting `query.ids` (comma-separated UUID list) instead of post-filtering response arrays
+- Component replacement: use handle-based IDs (`page:*`, `data-table:*`, `crud-form:*`, `section:*`) for deterministic overrides
 - Generated files: `apps/mercato/.mercato/generated/` — never edit manually
+- Enable modules in your app’s `src/modules.ts` (e.g. `apps/mercato/src/modules.ts`)
 - Run `npm run modules:prepare` after adding/modifying module files
+- New integration providers MUST own their env-backed preconfiguration inside the provider package: implement preset reading/application in the provider module, apply it from `setup.ts`, expose a rerunnable provider CLI command when practical, and document the env variables. Do not add provider-specific preconfiguration logic to core modules.
+
+## Backward Compatibility Contract
+
+> **Full specification**: [`BACKWARD_COMPATIBILITY.md`](BACKWARD_COMPATIBILITY.md) — MUST be read before modifying any contract surface.
+
+Third-party module developers depend on stable platform APIs. Any change to a **contract surface** is a breaking change that blocks merge unless the deprecation protocol is followed.
+
+**Deprecation protocol** (summary): (1) never remove in one release, (2) add `@deprecated` JSDoc, (3) provide a bridge (re-export/alias/dual-emit) for ≥1 minor version, (4) document in RELEASE_NOTES.md, (5) reference a spec with "Migration & Backward Compatibility" section.
+
+**13 contract surface categories** (details in `BACKWARD_COMPATIBILITY.md`):
+
+| # | Surface | Classification | Key Rule |
+|---|---------|---------------|----------|
+| 1 | Auto-discovery file conventions | FROZEN | File names, export names, routing algorithms immutable |
+| 2 | Type definitions & interfaces | STABLE | Required fields cannot be removed/narrowed; optional additive-only |
+| 3 | Function signatures | STABLE | Cannot remove/reorder params; new optional params OK |
+| 4 | Import paths | STABLE | Moved modules must re-export from old path |
+| 5 | Event IDs | FROZEN | Cannot rename/remove; payload fields additive-only |
+| 6 | Widget injection spot IDs | FROZEN | Cannot rename/remove; context fields additive-only |
+| 7 | API route URLs | STABLE | Cannot rename/remove; response fields additive-only |
+| 8 | Database schema | ADDITIVE-ONLY | No column/table rename/remove; new columns with defaults OK |
+| 9 | DI service names | STABLE | Cannot rename registration keys |
+| 10 | ACL feature IDs | FROZEN | Stored in DB; rename requires data migration |
+| 11 | Notification type IDs | FROZEN | Referenced by subscribers and stored in DB |
+| 12 | CLI commands | STABLE | Cannot rename/remove commands or required flags |
+| 13 | Generated file contracts | STABLE | Export names and `BootstrapData` shape immutable |
 
 ## Critical Rules
 
@@ -202,6 +275,7 @@ All paths use `src/modules/<module>/` as shorthand. See `packages/core/AGENTS.md
 ### UI & HTTP
 
 -   Use `apiCall`/`apiCallOrThrow`/`readApiResultOrThrow` from `@open-mercato/ui/backend/utils/apiCall` — never use raw `fetch`
+-   If a backend page cannot use `CrudForm`, wrap every write (`POST`/`PUT`/`PATCH`/`DELETE`) in `useGuardedMutation(...).runMutation(...)` and include `retryLastMutation` in the injection context
 -   For CRUD forms: `createCrud`/`updateCrud`/`deleteCrud` (auto-handle `raiseCrudError`)
 -   For local validation errors: throw `createCrudFormError(message, fieldErrors?)` from `@open-mercato/ui/backend/utils/serverErrors`
 -   Read JSON defensively: `readJsonSafe(response, fallback)` — never `.json().catch(() => ...)`

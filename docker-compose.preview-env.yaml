@@ -1,0 +1,142 @@
+
+# Full-stack per-PR preview environment.
+#
+# Deployed automatically by .github/workflows/preview-deploy.yml for PRs
+# targeting develop with the `preview-env` label.
+#
+# Required env vars (set via Dokploy compose stack or --env-file):
+#   DEPLOY_ENV          - e.g. pr-123
+#   PREVIEW_IMAGE       - GHCR image tag, e.g. ghcr.io/org/repo:pr-123-abc1234
+#   PREVIEW_HOSTNAME    - e.g. pr-123.preview.openmercato.com
+#   APP_URL             - https://${PREVIEW_HOSTNAME}
+#   JWT_SECRET          - any secret string
+#   POSTGRES_PASSWORD   - postgres password (preview-only value)
+#
+# To run locally:
+#   docker compose -f docker-compose.preview-env.yaml --env-file .env.preview up
+
+services:
+  app:
+    image: ${PREVIEW_IMAGE}
+    user: "0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /tmp/init-marker/.seeded ]; then
+          yarn mercato init && mkdir -p /tmp/init-marker && touch /tmp/init-marker/.seeded
+        else
+          yarn db:migrate
+        fi && yarn start
+    volumes:
+      - init_marker:/tmp/init-marker
+      - attachments_storage:/app/apps/mercato/storage
+    working_dir: /app/apps/mercato
+    environment:
+      NODE_ENV: production
+      DEPLOY_ENV: ${DEPLOY_ENV}
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@mercato-postgres-${DEPLOY_ENV}:5432/${POSTGRES_DB:-open-mercato}
+      JWT_SECRET: ${JWT_SECRET}
+      APP_URL: ${APP_URL}
+      CACHE_REDIS_URL: redis://mercato-redis-${DEPLOY_ENV}:6379
+      CACHE_STRATEGY: redis
+      ENABLE_CRUD_API_CACHE: "true"
+      MEILISEARCH_HOST: http://mercato-meilisearch-${DEPLOY_ENV}:7700
+      MEILISEARCH_API_KEY: ${MEILISEARCH_MASTER_KEY:-meilisearch-preview-key}
+      DEMO_MODE: "true"
+      TENANT_DATA_ENCRYPTION: ${TENANT_DATA_ENCRYPTION:-false}
+      TENANT_DATA_ENCRYPTION_FALLBACK_KEY: ${TENANT_DATA_ENCRYPTION_FALLBACK_KEY:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@preview.local}
+      OM_INIT_SUPERADMIN_EMAIL: ${OM_INIT_SUPERADMIN_EMAIL:-admin@preview.local}
+      OM_INIT_SUPERADMIN_PASSWORD: ${OM_INIT_SUPERADMIN_PASSWORD:-preview123}
+      SSO_FORCE_ROLE_ON_LOGIN: employee
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${DEPLOY_ENV}.rule=Host(`${PREVIEW_HOSTNAME}`)"
+      - "traefik.http.routers.${DEPLOY_ENV}.entrypoints=websecure"
+      - "traefik.http.routers.${DEPLOY_ENV}.tls.certresolver=letsencrypt"
+      - "traefik.http.services.${DEPLOY_ENV}.loadbalancer.server.port=3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    networks:
+      - mercato-network
+      - dokploy-network
+
+  postgres:
+    image: pgvector/pgvector:pg17-trixie
+    container_name: mercato-postgres-${DEPLOY_ENV}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-open-mercato}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mercato-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: mercato-redis-${DEPLOY_ENV}
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mercato-network
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    container_name: mercato-meilisearch-${DEPLOY_ENV}
+    restart: unless-stopped
+    environment:
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: ${MEILISEARCH_MASTER_KEY:-meilisearch-preview-key}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch_data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mercato-network
+
+volumes:
+  init_marker:
+    name: mercato-init-marker-${DEPLOY_ENV}
+  postgres_data:
+    name: mercato-postgres-data-${DEPLOY_ENV}
+  redis_data:
+    name: mercato-redis-data-${DEPLOY_ENV}
+  meilisearch_data:
+    name: mercato-meilisearch-data-${DEPLOY_ENV}
+  attachments_storage:
+    name: mercato-attachments-storage-${DEPLOY_ENV}
+
+networks:
+  # Isolated bridge network for this PR's stack
+  mercato-network:
+    name: mercato-network-${DEPLOY_ENV}
+    driver: bridge
+  # Dokploy's Traefik proxy network — must exist on the server.
+  # Verify the exact name with: docker network ls | grep traefik
+  # Common values: dokploy-network, traefik-public
+  dokploy-network:
+    external: true
+    name: dokploy-network
