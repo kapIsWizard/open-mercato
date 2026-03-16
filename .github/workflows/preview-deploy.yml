@@ -134,6 +134,7 @@ jobs:
           PREVIEW_HOSTNAME: ${{ steps.meta.outputs.preview_hostname }}
           JWT_SECRET: ${{ secrets.PREVIEW_JWT_SECRET }}
           POSTGRES_PASSWORD: ${{ secrets.PREVIEW_POSTGRES_PASSWORD }}
+          ENCRYPTION_KEY: ${{ secrets.PREVIEW_ENCRYPTION_KEY }}
         run: |
           set -euo pipefail
 
@@ -147,6 +148,8 @@ jobs:
           APP_URL=https://${PREVIEW_HOSTNAME}
           JWT_SECRET=${JWT_SECRET}
           POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          TENANT_DATA_ENCRYPTION=true
+          TENANT_DATA_ENCRYPTION_FALLBACK_KEY=${ENCRYPTION_KEY}
           MEILISEARCH_MASTER_KEY=meilisearch-preview-key
           ADMIN_EMAIL=admin@preview.local
           OM_INIT_SUPERADMIN_EMAIL=admin@preview.local
